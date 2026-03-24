@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}إنشاء حساب — Qmemory{% endblock %}
+{% block content %}
+<div class="flex justify-center items-center min-h-[80vh]">
+    <div class="card w-96 bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-2xl mb-4">🧠 حساب جديد</h2>
+
+            {% if error %}
+            <div class="alert alert-error mb-4">
+                <span>{{ error }}</span>
+            </div>
+            {% endif %}
+
+            <form method="post" action="/signup">
+                <div class="form-control mb-3">
+                    <label class="label"><span class="label-text">الاسم</span></label>
+                    <input type="text" name="name" class="input input-bordered" required>
+                </div>
+                <div class="form-control mb-3">
+                    <label class="label"><span class="label-text">البريد الإلكتروني</span></label>
+                    <input type="email" name="email" class="input input-bordered" required dir="ltr">
+                </div>
+                <div class="form-control mb-4">
+                    <label class="label"><span class="label-text">كلمة المرور</span></label>
+                    <input type="password" name="password" class="input input-bordered" required dir="ltr" minlength="8">
+                </div>
+                <button type="submit" class="btn btn-primary w-full">إنشاء حساب</button>
+            </form>
+
+            <p class="text-center mt-4 text-sm">
+                عندك حساب؟ <a href="/login" class="link link-primary">سجّل دخول</a>
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
