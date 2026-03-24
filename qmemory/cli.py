@@ -6,7 +6,7 @@ Entry point for all command-line operations:
 - serve-http  — Start MCP server (HTTP, for Claude.ai)
 - status      — Check SurrealDB connection + show record counts
 - schema      — Apply database schema (idempotent)
-- worker      — Placeholder for background worker (Phase 2)
+- worker      — Run background worker (linker, reflector, salience decay)
 """
 
 import asyncio
@@ -136,14 +136,25 @@ async def _schema():
 
 
 # ---------------------------------------------------------------------------
-# worker  (Phase 2 placeholder)
+# worker
 # ---------------------------------------------------------------------------
 
 
 @main.command()
 def worker():
-    """Start background worker (linker, reflect, salience decay). Coming in Phase 2."""
-    click.echo("Worker not implemented yet. Coming in Phase 2.")
+    """Run the background worker (linker, reflector, salience decay)."""
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    from qmemory.worker import run_worker
+
+    try:
+        asyncio.run(run_worker())
+    except KeyboardInterrupt:
+        click.echo("Worker stopped.")
 
 
 # ---------------------------------------------------------------------------
