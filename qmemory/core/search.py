@@ -61,6 +61,7 @@ async def search_memories(
     scope: str | None = None,
     limit: int = 20,
     include_tool_calls: bool = False,
+    owner_id: str | None = None,
     db: Any = None,
 ) -> dict:
     """
@@ -81,6 +82,9 @@ async def search_memories(
         include_tool_calls: If True, a future version will include tool call
                            history in results. Placeholder for now — not yet
                            implemented (tool_call table search comes later).
+        owner_id:          Optional user ID for multi-tenant cloud mode. When set,
+                           filters results to only memories owned by this user.
+                           When None (local mode), no owner filter is applied.
         db:                Optional SurrealDB connection. If None, creates a
                            fresh one via get_db(). Pass a test fixture here.
 
@@ -110,6 +114,8 @@ async def search_memories(
           "_nudge": "Memory memory:mem123 has connections. Explore: qmemory_search(query='...')"
         }
     """
+    logger.debug("Searching with owner=%s", owner_id)
+
     # Convert single category to the list format that recall() expects
     categories = [category] if category else None
 
@@ -123,6 +129,7 @@ async def search_memories(
             scope=scope,
             categories=categories,
             limit=limit,
+            owner_id=owner_id,
             db=db,
         )
     else:
@@ -135,6 +142,7 @@ async def search_memories(
                 scope=scope,
                 categories=categories,
                 limit=limit,
+                owner_id=owner_id,
                 db=conn,
             )
             # Run graph enrichment on the same connection

@@ -61,6 +61,7 @@ async def save_memory(
     valid_from: str | None = None,
     valid_until: str | None = None,
     source_type: str = "conversation",
+    owner_id: str | None = None,
     db: Any = None,
 ) -> dict:
     """
@@ -82,6 +83,9 @@ async def save_memory(
         valid_from:     ISO datetime string — when the fact became true.
         valid_until:    ISO datetime string — when the fact expired.
         source_type:    How sourced: "conversation", "workspace", "agent", etc.
+        owner_id:       Optional user ID for multi-tenant cloud mode. When set,
+                        tags the memory with owner = type::record('user', owner_id).
+                        When None (local mode), no owner is set.
         db:             Optional SurrealDB connection. If None, creates a
                         fresh one via get_db(). Pass the test fixture here.
 
@@ -103,6 +107,8 @@ async def save_memory(
             f"Invalid category '{category}'. "
             f"Must be one of: {', '.join(MEMORY_CATEGORIES)}"
         )
+
+    logger.debug("Saving memory with owner=%s", owner_id)
 
     # --- Step 2: Run deduplication ---
     # Before creating a new memory, check if a similar one already exists.
@@ -215,6 +221,11 @@ async def save_memory(
     # This avoids sending NULL to SurrealDB's option<> fields.
 
     optional_parts: list[str] = []
+
+    if owner_id:
+        # owner is a record<user> FK — wrap in type::record()
+        optional_parts.append("owner = type::record('user', $owner_id)")
+        params["owner_id"] = owner_id
 
     if source_person:
         # source_person is a record<entity> FK — wrap in type::record()

@@ -152,6 +152,7 @@ async def recall(
     limit: int = 20,
     min_salience: float | None = None,
     token_budget: int | None = None,
+    owner_id: str | None = None,
     db: Any = None,
 ) -> list[dict]:
     """
@@ -673,6 +674,7 @@ def _format_age(created_at: Any) -> str:
 
 async def assemble_context(
     session_key: str,
+    owner_id: str | None = None,
     db: Any = None,
 ) -> str:
     """
@@ -696,13 +698,13 @@ async def assemble_context(
         Returns a minimal header if no memories exist.
     """
     if db is not None:
-        return await _assemble(session_key, db)
+        return await _assemble(session_key, owner_id, db)
     else:
         async with get_db() as conn:
-            return await _assemble(session_key, conn)
+            return await _assemble(session_key, owner_id, conn)
 
 
-async def _assemble(session_key: str, db: Any) -> str:
+async def _assemble(session_key: str, owner_id: str | None, db: Any) -> str:
     """
     Internal assembly logic — called with an active DB connection.
     """
@@ -724,9 +726,11 @@ async def _assemble(session_key: str, db: Any) -> str:
     # --- Step 3: Load all other memories for the current scope ---
     # We recall both scope-specific AND global memories.
     # High-salience memories (critical rules, preferences) are always included.
+    logger.debug("Assembling context for session=%s owner=%s", session_key, owner_id)
     memories = await recall(
         scope=scope if scope != "global" else None,
         limit=50,
+        owner_id=owner_id,
         db=db,
     )
 
