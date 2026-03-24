@@ -1,0 +1,41 @@
+[project]
+name = "qmemory"
+version = "1.0.0"
+description = "Graph-based memory for AI agents"
+requires-python = ">=3.11"
+dependencies = [
+    "surrealdb>=1.0.0",
+    "mcp[cli]>=1.0.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "anthropic>=0.40",
+    "voyageai>=0.3",
+    "click>=8.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+nanobot = ["nanobot-ai>=0.1.4"]
+books = ["pymupdf", "google-genai", "ebooklib", "beautifulsoup4"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+qmemory = "qmemory.cli:main"
+
+[project.entry-points."nanobot.tools"]
+qmemory_bootstrap = "qmemory.nanobot.bootstrap:QmemoryBootstrapTool"
+qmemory_search = "qmemory.nanobot.search:QmemorySearchTool"
+qmemory_save = "qmemory.nanobot.save:QmemorySaveTool"
+qmemory_correct = "qmemory.nanobot.correct:QmemoryCorrectTool"
+qmemory_link = "qmemory.nanobot.link:QmemoryLinkTool"
+qmemory_person = "qmemory.nanobot.person:QmemoryPersonTool"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qmemory"]
