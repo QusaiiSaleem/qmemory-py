@@ -80,8 +80,8 @@ async def test_correct_memory(db):
     # The new memory should point to the old memory via prev_version
     edges = await query(
         db,
-        "SELECT * FROM prev_version WHERE in = type::record('memory', $new_id)",
-        {"new_id": new_id_suffix},
+        "SELECT * FROM prev_version WHERE in = <record>$from_id",
+        {"from_id": result["new_memory_id"]},
     )
     assert edges is not None and len(edges) >= 1
 
@@ -279,8 +279,8 @@ async def test_unlink_edge(db):
     # Find the edge ID so we can unlink it
     edges = await query(
         db,
-        "SELECT id FROM relates WHERE in = type::record('memory', $id1)",
-        {"id1": id1},
+        "SELECT id FROM relates WHERE in = <record>$from_id",
+        {"from_id": mem1["memory_id"]},
     )
     assert edges is not None and len(edges) >= 1
 
@@ -300,8 +300,8 @@ async def test_unlink_edge(db):
     # Verify the edge is GONE
     edges_after = await query(
         db,
-        "SELECT id FROM relates WHERE in = type::record('memory', $id1)",
-        {"id1": id1},
+        "SELECT id FROM relates WHERE in = <record>$from_id",
+        {"from_id": mem1["memory_id"]},
     )
     assert edges_after is None or len(edges_after) == 0
 

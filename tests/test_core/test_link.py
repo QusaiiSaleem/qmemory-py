@@ -167,8 +167,8 @@ async def test_edge_exists_in_database(db):
     # Query SurrealDB directly to verify the edge exists
     edges_in_db = await query(
         db,
-        "SELECT id, relationship_type FROM relates WHERE in = type::record('memory', $id)",
-        {"id": id1_suffix},
+        "SELECT id, relationship_type FROM relates WHERE in = <record>$from_id",
+        {"from_id": m1["memory_id"]},
     )
 
     assert edges_in_db is not None
@@ -198,8 +198,8 @@ async def test_reason_stored_in_edge(db):
     # Verify the reason was stored
     edges_in_db = await query(
         db,
-        "SELECT reason FROM relates WHERE in = type::record('memory', $id)",
-        {"id": id1_suffix},
+        "SELECT reason FROM relates WHERE in = <record>$from_id",
+        {"from_id": m1["memory_id"]},
     )
 
     assert edges_in_db is not None and len(edges_in_db) >= 1
@@ -328,11 +328,10 @@ async def test_multiple_edges_from_same_node(db):
     assert edge1["edge_id"] != edge2["edge_id"]
 
     # Verify both exist in the DB
-    id_suffix = source["memory_id"].split(":")[1]
     edges_in_db = await query(
         db,
-        "SELECT id FROM relates WHERE in = type::record('memory', $id)",
-        {"id": id_suffix},
+        "SELECT id FROM relates WHERE in = <record>$from_id",
+        {"from_id": source["memory_id"]},
     )
 
     assert edges_in_db is not None

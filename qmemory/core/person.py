@@ -267,12 +267,12 @@ async def _create_person_impl(
             db,
             """
             SELECT id FROM relates
-            WHERE in = type::record('entity', $from_id)
-            AND out = type::record('entity', $to_id)
+            WHERE in = <record>$from_id
+            AND out = <record>$to_id
             AND relationship_type = 'has_identity'
             LIMIT 1
             """,
-            {"from_id": person_suffix, "to_id": contact_suffix_for_relate},
+            {"from_id": person_id, "to_id": contact_id},
         )
 
         if existing_edge and len(existing_edge) > 0:
@@ -351,10 +351,10 @@ async def _find_person_impl(
             db,
             """
             SELECT out FROM relates
-            WHERE in = type::record('entity', $id)
+            WHERE in = <record>$from_id
             AND relationship_type = 'has_identity'
             """,
-            {"id": person_suffix},
+            {"from_id": person_id},
         )
         contact_ids = [str(row["out"]) for row in (contact_rows or [])]
 
@@ -381,18 +381,17 @@ async def _find_person_impl(
     if by_handle and len(by_handle) > 0:
         contact = by_handle[0]
         contact_id = str(contact["id"])
-        _, contact_suffix = contact_id.split(":", 1)
 
         # Traverse the has_identity edge backwards to find the person
         person_rows = await query(
             db,
             """
             SELECT in FROM relates
-            WHERE out = type::record('entity', $id)
+            WHERE out = <record>$to_id
             AND relationship_type = 'has_identity'
             LIMIT 1
             """,
-            {"id": contact_suffix},
+            {"to_id": contact_id},
         )
 
         if person_rows and len(person_rows) > 0:
@@ -414,10 +413,10 @@ async def _find_person_impl(
                     db,
                     """
                     SELECT out FROM relates
-                    WHERE in = type::record('entity', $id)
+                    WHERE in = <record>$from_id
                     AND relationship_type = 'has_identity'
                     """,
-                    {"id": person_suffix},
+                    {"from_id": person_id},
                 )
                 all_contact_ids = [str(row["out"]) for row in (contact_rows or [])]
 

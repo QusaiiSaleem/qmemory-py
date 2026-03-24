@@ -177,10 +177,10 @@ async def test_has_identity_edges_exist_in_db(db):
         db,
         """
         SELECT id, relationship_type, out FROM relates
-        WHERE in = type::record('entity', $id)
+        WHERE in = <record>$from_id
         AND relationship_type = 'has_identity'
         """,
-        {"id": person_suffix},
+        {"from_id": person_id},
     )
 
     assert edges is not None

@@ -126,6 +126,7 @@ DEFINE FIELD IF NOT EXISTS created_at ON extracted_from TYPE datetime DEFAULT ti
 
 DEFINE TABLE IF NOT EXISTS prev_version SCHEMAFULL TYPE RELATION
     IN memory OUT memory;
+DEFINE FIELD IF NOT EXISTS created_at ON prev_version TYPE datetime DEFAULT time::now();
 
 -- ============================================================
 -- EDGE: relates (dynamic — agent creates any relationship)
@@ -135,11 +136,12 @@ DEFINE TABLE IF NOT EXISTS relates SCHEMAFULL TYPE RELATION
     IN session | message | memory | entity
     OUT session | message | memory | entity;
 
-DEFINE FIELD IF NOT EXISTS type       ON relates TYPE string       DEFAULT "related";
-DEFINE FIELD IF NOT EXISTS reason     ON relates TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS confidence ON relates TYPE float         DEFAULT 0.8;
-DEFINE FIELD IF NOT EXISTS created_by ON relates TYPE string        DEFAULT "system";
-DEFINE FIELD IF NOT EXISTS created_at ON relates TYPE datetime      DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS type              ON relates TYPE string       DEFAULT "related";
+DEFINE FIELD IF NOT EXISTS relationship_type ON relates TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS reason            ON relates TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS confidence        ON relates TYPE float         DEFAULT 0.8;
+DEFINE FIELD IF NOT EXISTS created_by        ON relates TYPE string        DEFAULT "system";
+DEFINE FIELD IF NOT EXISTS created_at        ON relates TYPE datetime      DEFAULT time::now();
 
 DEFINE INDEX IF NOT EXISTS idx_relates_type ON relates FIELDS type;
 DEFINE INDEX IF NOT EXISTS idx_relates_created_by ON relates FIELDS created_by;
