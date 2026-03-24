@@ -28,6 +28,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from qmemory.app.config import get_app_settings
 from qmemory.app.routes.auth import get_session_user, router as auth_router
+from qmemory.app.routes.connect import router as connect_router
 from qmemory.db.client import is_healthy
 
 # ---------------------------------------------------------------------------
@@ -410,7 +411,9 @@ api.add_middleware(
 # Include auth routes (login, signup, logout)
 # ---------------------------------------------------------------------------
 api.include_router(auth_router)
+api.include_router(connect_router)
 logger.info("Auth routes included: /login, /signup, /logout")
+logger.info("Connect route included: /connect")
 
 
 # ---------------------------------------------------------------------------

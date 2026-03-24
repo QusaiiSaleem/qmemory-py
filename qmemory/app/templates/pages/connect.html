@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}ربط الأدوات — Qmemory{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <h1 class="text-2xl font-bold mb-2">ربط أدوات الذكاء الاصطناعي</h1>
+    <p class="text-gray-500 mb-6">انسخ الإعدادات والصقها في أداتك — 30 ثانية فقط</p>
+
+    <!-- Show existing token or prompt to generate one -->
+    {% if token %}
+    <div class="bg-base-100 rounded-lg p-4 mb-6 border">
+        <div class="flex justify-between items-center mb-2">
+            <span class="font-semibold">عنوان MCP</span>
+        </div>
+        <div class="relative">
+            <code class="block bg-base-200 p-3 rounded text-sm swap-dir select-all" dir="ltr">https://mem0.qusai.org/mcp/</code>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div x-data="{ tab: 'claude-code' }" class="mb-8">
+        <div class="tabs tabs-boxed mb-4">
+            <a class="tab" :class="tab === 'claude-code' && 'tab-active'" @click="tab = 'claude-code'">Claude Code</a>
+            <a class="tab" :class="tab === 'claude-ai' && 'tab-active'" @click="tab = 'claude-ai'">Claude.ai</a>
+            <a class="tab" :class="tab === 'nanobot' && 'tab-active'" @click="tab = 'nanobot'">NanoBot</a>
+        </div>
+
+        <!-- Claude Code Tab -->
+        <div x-show="tab === 'claude-code'" class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h3 class="card-title text-lg">Claude Code</h3>
+                <p class="text-sm text-gray-500 mb-3">الخطوة 1: شغّل هذا الأمر في الترمينال</p>
+                <div class="relative">
+                    <pre class="bg-base-200 p-4 rounded text-sm overflow-x-auto swap-dir" dir="ltr"><code>claude mcp add qmemory \
+  --transport http \
+  --url https://mem0.qusai.org/mcp/ \
+  --header "Authorization: Bearer {{ token }}"</code></pre>
+                    <button class="btn btn-sm btn-ghost absolute top-2 left-2" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent.trim())">📋</button>
+                </div>
+                <p class="text-sm text-gray-500 mt-3">الخطوة 2: أعد تشغيل Claude Code</p>
+                <p class="text-sm text-gray-500">الخطوة 3: جرّب — اكتب "bootstrap my memory"</p>
+                <div class="divider">أو يدوياً</div>
+                <p class="text-sm text-gray-500 mb-2">أضف إلى <code class="swap-dir" dir="ltr">~/.claude.json</code>:</p>
+                <div class="relative">
+                    <pre class="bg-base-200 p-4 rounded text-sm overflow-x-auto swap-dir" dir="ltr"><code>{
+  "mcpServers": {
+    "qmemory": {
+      "type": "streamable-http",
+      "url": "https://mem0.qusai.org/mcp/",
+      "headers": {
+        "Authorization": "Bearer {{ token }}"
+      }
+    }
+  }
+}</code></pre>
+                    <button class="btn btn-sm btn-ghost absolute top-2 left-2" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent.trim())">📋</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Claude.ai Tab -->
+        <div x-show="tab === 'claude-ai'" class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h3 class="card-title text-lg">Claude.ai</h3>
+                <p class="text-sm text-gray-500 mb-3">الخطوة 1: افتح Claude.ai → Settings → Integrations</p>
+                <p class="text-sm text-gray-500 mb-3">الخطوة 2: اضغط "Add MCP Server"</p>
+                <p class="text-sm text-gray-500 mb-2">الخطوة 3: الصق هذا الرابط:</p>
+                <div class="relative">
+                    <pre class="bg-base-200 p-4 rounded text-sm swap-dir" dir="ltr"><code>https://mem0.qusai.org/mcp/</code></pre>
+                    <button class="btn btn-sm btn-ghost absolute top-2 left-2" onclick="navigator.clipboard.writeText('https://mem0.qusai.org/mcp/')">📋</button>
+                </div>
+                <p class="text-sm text-gray-500 mt-3 mb-2">الخطوة 4: أضف هذا الهيدر:</p>
+                <div class="relative">
+                    <pre class="bg-base-200 p-4 rounded text-sm swap-dir" dir="ltr"><code>Authorization: Bearer {{ token }}</code></pre>
+                    <button class="btn btn-sm btn-ghost absolute top-2 left-2" onclick="navigator.clipboard.writeText('Authorization: Bearer {{ token }}')">📋</button>
+                </div>
+                <p class="text-sm text-gray-500 mt-3">الخطوة 5: جرّب — اسأل Claude "bootstrap my memory"</p>
+            </div>
+        </div>
+
+        <!-- NanoBot Tab -->
+        <div x-show="tab === 'nanobot'" class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h3 class="card-title text-lg">NanoBot</h3>
+                <p class="text-sm text-gray-500 mb-2">أضف إلى <code class="swap-dir" dir="ltr">~/.nanobot/config.json</code> تحت <code class="swap-dir" dir="ltr">tools.mcpServers</code>:</p>
+                <div class="relative">
+                    <pre class="bg-base-200 p-4 rounded text-sm overflow-x-auto swap-dir" dir="ltr"><code>"qmemory": {
+  "type": "streamableHttp",
+  "url": "https://mem0.qusai.org/mcp/",
+  "headers": {
+    "Authorization": "Bearer {{ token }}"
+  },
+  "enabledTools": ["*"]
+}</code></pre>
+                    <button class="btn btn-sm btn-ghost absolute top-2 left-2" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent.trim())">📋</button>
+                </div>
+                <p class="text-sm text-gray-500 mt-3">ثم أعد تشغيل: <code class="swap-dir" dir="ltr">nanobot gateway</code></p>
+                <div class="divider"></div>
+                <p class="text-sm text-gray-500">ملاحظة: هذا يحل محل الـ plugin المحلي. لا تحتاج SurrealDB محلي.</p>
+            </div>
+        </div>
+    </div>
+
+    {% else %}
+    <!-- No token yet — prompt to generate one -->
+    <div class="card bg-base-100 shadow">
+        <div class="card-body text-center">
+            <p class="mb-4">تحتاج مفتاح API أولاً لربط أدواتك</p>
+            <a href="/tokens" class="btn btn-primary">إنشاء مفتاح API</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
