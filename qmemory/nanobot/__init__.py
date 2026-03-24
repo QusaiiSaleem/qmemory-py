@@ -9,9 +9,9 @@ Tools are registered via entry points in pyproject.toml under the
 automatically at startup without any manual registration step.
 
 Each tool class:
-  - Inherits from nanobot.tools.BaseTool (guarded import — safe without SDK)
-  - Declares name, description, parameters (JSON Schema)
-  - Implements async run(**kwargs) that calls the matching core function
+  - Inherits from nanobot.agent.tools.base.Tool (guarded import — safe without SDK)
+  - Declares name, description, parameters as @property (JSON Schema)
+  - Implements async execute(**kwargs) that calls the matching core function
 
 Available tools:
   QmemoryBootstrapTool  — bootstrap.py  — calls assemble_context()

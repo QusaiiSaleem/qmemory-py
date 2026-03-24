@@ -16,82 +16,89 @@ from __future__ import annotations
 import json
 
 try:
-    from nanobot.tools import BaseTool  # type: ignore[import-untyped]
+    from nanobot.agent.tools.base import Tool  # type: ignore[import-untyped]
 
     _NANOBOT_AVAILABLE = True
 except ImportError:
-    class BaseTool:  # type: ignore[no-redef]
+    class Tool:  # type: ignore[no-redef]
         pass
 
     _NANOBOT_AVAILABLE = False
 
 
-class QmemoryLinkTool(BaseTool):
+class QmemoryLinkTool(Tool):
     """Create a relationship edge between any two nodes in the memory graph.
 
     Calls link_nodes() which creates a 'relates' edge with a typed relationship.
     The relationship_type can be any string — there is no fixed list.
     """
 
-    name = "qmemory_link"
+    @property
+    def name(self) -> str:
+        return "qmemory_link"
 
-    description = (
-        "Create a relationship edge between any two nodes in the memory graph. "
-        "This is what turns a flat list of facts into a connected knowledge graph. "
-        "The relationship type can be ANYTHING meaningful — choose a type that "
-        "describes WHY these two things are connected."
-    )
+    @property
+    def description(self) -> str:
+        return (
+            "Create a relationship edge between any two nodes in the memory graph. "
+            "This is what turns a flat list of facts into a connected knowledge graph. "
+            "The relationship type can be ANYTHING meaningful — choose a type that "
+            "describes WHY these two things are connected."
+        )
 
-    parameters = {
-        "type": "object",
-        "properties": {
-            "from_id": {
-                "type": "string",
-                "description": (
-                    "Source node ID. Examples: "
-                    "'memory:mem1710864000000abc', "
-                    "'entity:ent1710864000000xyz', "
-                    "'session:ses1710864000000def'"
-                ),
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "from_id": {
+                    "type": "string",
+                    "description": (
+                        "Source node ID. Examples: "
+                        "'memory:mem1710864000000abc', "
+                        "'entity:ent1710864000000xyz', "
+                        "'session:ses1710864000000def'"
+                    ),
+                },
+                "to_id": {
+                    "type": "string",
+                    "description": "Target node ID. Can be a different table type.",
+                },
+                "relationship_type": {
+                    "type": "string",
+                    "description": (
+                        "Any string describing the connection. Examples: "
+                        "supports, contradicts, caused_by, depends_on, "
+                        "belongs_to_topic, has_identity, related_to, "
+                        "blocks, inspired_by, summarizes, expands_on"
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional note explaining why this connection exists.",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "How confident are you in this connection? 0.0-1.0.",
+                },
             },
-            "to_id": {
-                "type": "string",
-                "description": "Target node ID. Can be a different table type.",
-            },
-            "relationship_type": {
-                "type": "string",
-                "description": (
-                    "Any string describing the connection. Examples: "
-                    "supports, contradicts, caused_by, depends_on, "
-                    "belongs_to_topic, has_identity, related_to, "
-                    "blocks, inspired_by, summarizes, expands_on"
-                ),
-            },
-            "reason": {
-                "type": "string",
-                "description": "Optional note explaining why this connection exists.",
-            },
-            "confidence": {
-                "type": "number",
-                "description": "How confident are you in this connection? 0.0-1.0.",
-            },
-        },
-        "required": ["from_id", "to_id", "relationship_type"],
-    }
+            "required": ["from_id", "to_id", "relationship_type"],
+        }
 
-    async def run(
-        self,
-        from_id: str,
-        to_id: str,
-        relationship_type: str,
-        reason: str | None = None,
-        confidence: float | None = None,
-    ) -> str:
+    async def execute(self, **kwargs) -> str:
         """Execute the link creation and return the result as a JSON string.
 
         Returns JSON with edge_id and an exploration nudge, or null if either
         node doesn't exist.
         """
+        # Extract kwargs — NanoBot's Tool base class passes parameters as
+        # keyword arguments to execute().
+        from_id = kwargs.get("from_id", "")
+        to_id = kwargs.get("to_id", "")
+        relationship_type = kwargs.get("relationship_type", "")
+        reason = kwargs.get("reason")
+        confidence = kwargs.get("confidence")
+
         from qmemory.core.link import link_nodes
 
         result = await link_nodes(
