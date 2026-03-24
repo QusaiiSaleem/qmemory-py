@@ -29,6 +29,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from qmemory.app.config import get_app_settings
 from qmemory.app.routes.auth import get_session_user, router as auth_router
 from qmemory.app.routes.connect import router as connect_router
+from qmemory.app.routes.dashboard import router as dashboard_router
+from qmemory.app.routes.memories import router as memories_router
+from qmemory.app.routes.tokens import router as tokens_router
 from qmemory.db.client import is_healthy
 
 # ---------------------------------------------------------------------------
@@ -412,8 +415,14 @@ api.add_middleware(
 # ---------------------------------------------------------------------------
 api.include_router(auth_router)
 api.include_router(connect_router)
+api.include_router(dashboard_router)
+api.include_router(memories_router)
+api.include_router(tokens_router)
 logger.info("Auth routes included: /login, /signup, /logout")
 logger.info("Connect route included: /connect")
+logger.info("Dashboard route included: /dashboard")
+logger.info("Memory routes included: /memories, /memories/search, /memories/{id}")
+logger.info("Tokens routes included: /tokens, /tokens/generate, /tokens/{id}")
 
 
 # ---------------------------------------------------------------------------
@@ -428,58 +437,6 @@ async def root_redirect(request: Request):
     if user:
         return RedirectResponse(url="/dashboard", status_code=302)
     return RedirectResponse(url="/login", status_code=302)
-
-
-# ---------------------------------------------------------------------------
-# Placeholder: /dashboard (will be built in Task 9)
-# ---------------------------------------------------------------------------
-
-
-@api.get("/dashboard")
-async def dashboard_placeholder(request: Request):
-    """Temporary placeholder for the dashboard page."""
-    from fastapi.responses import HTMLResponse
-
-    user = get_session_user(request)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-
-    name = user.get("name", "")
-    email = user.get("email", "")
-    return HTMLResponse(
-        f"""<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <title>لوحة التحكم — Qmemory</title>
-    <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <style>* {{ font-family: 'Cairo', sans-serif; }}</style>
-</head>
-<body class="min-h-screen bg-base-200">
-    <nav class="navbar bg-base-100 shadow-sm">
-        <div class="flex-1">
-            <a href="/dashboard" class="btn btn-ghost text-xl">🧠 Qmemory</a>
-        </div>
-        <div class="flex-none">
-            <form method="post" action="/logout">
-                <button type="submit" class="btn btn-ghost btn-sm">خروج</button>
-            </form>
-        </div>
-    </nav>
-    <main class="container mx-auto p-4 max-w-4xl">
-        <div class="card bg-base-100 shadow-xl mt-8">
-            <div class="card-body text-center">
-                <h2 class="card-title text-2xl justify-center mb-4">مرحباً {name}! 👋</h2>
-                <p class="text-gray-500">{email}</p>
-                <p class="mt-4 text-gray-400">لوحة التحكم قادمة قريباً...</p>
-            </div>
-        </div>
-    </main>
-</body>
-</html>"""
-    )
 
 
 @api.get("/health")

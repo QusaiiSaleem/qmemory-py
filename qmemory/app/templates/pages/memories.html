@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}الذكريات — Qmemory{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto" x-data="{ activeCategory: '' }">
+
+    <h1 class="text-2xl font-bold mb-6">الذكريات</h1>
+
+    {# =================================================================== #}
+    {# Search input — HTMX active search with 300ms debounce              #}
+    {# =================================================================== #}
+    <div class="form-control mb-4">
+        <div class="relative">
+            <input
+                type="text"
+                id="search-input"
+                name="q"
+                class="input input-bordered w-full pr-10"
+                placeholder="ابحث في ذكرياتك..."
+                dir="auto"
+                hx-get="/memories/search"
+                hx-trigger="input changed delay:300ms, search"
+                hx-target="#results"
+                hx-include="[name='category']"
+            >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 absolute top-3.5 left-3 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+        </div>
+    </div>
+
+    {# =================================================================== #}
+    {# Category filter buttons — all 8 categories + "all"                  #}
+    {# =================================================================== #}
+    <div class="flex flex-wrap gap-2 mb-6">
+        {# "All" button #}
+        <button
+            class="btn btn-sm"
+            :class="activeCategory === '' ? 'btn-primary' : 'btn-outline'"
+            @click="activeCategory = ''; document.getElementById('category-input').value = ''; htmx.trigger('#search-input', 'search')"
+        >الكل</button>
+
+        {# Category buttons #}
+        {% for cat in categories %}
+        <button
+            class="btn btn-sm"
+            :class="activeCategory === '{{ cat }}' ? 'btn-primary' : 'btn-outline'"
+            @click="activeCategory = '{{ cat }}'; document.getElementById('category-input').value = '{{ cat }}'; htmx.trigger('#search-input', 'search')"
+        >{{ cat }}</button>
+        {% endfor %}
+
+        {# Hidden input to send category value with HTMX request #}
+        <input type="hidden" id="category-input" name="category" value="">
+    </div>
+
+    {# =================================================================== #}
+    {# Results area — populated by HTMX from /memories/search              #}
+    {# =================================================================== #}
+    <div id="results"
+         hx-get="/memories/search"
+         hx-trigger="load"
+         hx-include="[name='q'], [name='category']"
+    >
+        {# Initial content replaced by HTMX on page load #}
+        <div class="text-center py-8">
+            <span class="loading loading-spinner loading-md"></span>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

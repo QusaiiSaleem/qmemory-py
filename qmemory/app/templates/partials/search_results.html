@@ -1,0 +1,35 @@
+{#
+    Search Results — partial returned by the HTMX /memories/search endpoint.
+
+    Expected variables:
+    - results: list of memory dicts
+    - result_count: integer count of results
+    - category_colors: dict mapping category names to DaisyUI badge classes
+    - query: the search query text (for display)
+#}
+
+{# --- Result count header --- #}
+{% if result_count > 0 %}
+<p class="text-sm text-gray-500 mb-4">
+    {{ result_count }} {% if result_count == 1 %}نتيجة{% else %}نتائج{% endif %}
+    {% if query %} لـ "{{ query }}"{% endif %}
+</p>
+{% endif %}
+
+{# --- Results list --- #}
+{% if results %}
+<div class="flex flex-col gap-3">
+    {% for memory in results %}
+    {% include "partials/memory_card.html" %}
+    {% endfor %}
+</div>
+{% else %}
+{# --- No results message --- #}
+<div class="text-center py-12 text-gray-400">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto mb-3 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+    <p class="text-lg mb-1">لا توجد نتائج</p>
+    <p class="text-sm">جرّب كلمات بحث مختلفة أو اختر فئة أخرى</p>
+</div>
+{% endif %}

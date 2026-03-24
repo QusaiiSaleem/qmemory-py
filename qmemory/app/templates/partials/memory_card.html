@@ -1,0 +1,41 @@
+{#
+    Memory Card — reusable partial for displaying a single memory.
+
+    Expected variables:
+    - memory: dict with content, category, salience, created_at, id, etc.
+    - category_colors: dict mapping category names to DaisyUI badge classes
+#}
+
+{% set mem_id = memory.id.split(':')[-1] if memory.id and ':' in memory.id|string else memory.id %}
+{% set badge_class = category_colors.get(memory.category, 'badge-neutral') if category_colors else 'badge-neutral' %}
+{% set salience_pct = ((memory.salience or 0) * 100)|int %}
+
+<a href="/memories/{{ mem_id }}" class="card bg-base-100 shadow-sm hover:shadow-md transition-shadow cursor-pointer block">
+    <div class="card-body p-4">
+        {# --- Content preview (truncated to ~200 chars) --- #}
+        <p class="text-sm leading-relaxed">
+            {{ memory.content[:200] }}{% if memory.content|length > 200 %}...{% endif %}
+        </p>
+
+        {# --- Bottom row: category badge + salience + date --- #}
+        <div class="flex items-center gap-3 mt-3 flex-wrap">
+            {# Category badge #}
+            <span class="badge {{ badge_class }} badge-sm">{{ memory.category or 'unknown' }}</span>
+
+            {# Salience bar #}
+            <div class="flex items-center gap-1 text-xs text-gray-500" title="Salience: {{ salience_pct }}%">
+                <div class="w-16 bg-base-200 rounded-full h-1.5">
+                    <div class="bg-primary rounded-full h-1.5" style="width: {{ salience_pct }}%"></div>
+                </div>
+                <span>{{ salience_pct }}%</span>
+            </div>
+
+            {# Created date #}
+            {% if memory.created_at %}
+            <span class="text-xs text-gray-400 mr-auto">
+                {{ memory.created_at[:10] if memory.created_at is string else memory.created_at }}
+            </span>
+            {% endif %}
+        </div>
+    </div>
+</a>
