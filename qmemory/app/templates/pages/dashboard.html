@@ -1,73 +1,82 @@
 {% extends "base.html" %}
-{% block title %}لوحة التحكم — Qmemory{% endblock %}
+{% block title %}Dashboard — Qmemory{% endblock %}
 {% block content %}
-<div class="max-w-4xl mx-auto">
 
-    {# --- Welcome header --- #}
-    <h1 class="text-2xl font-bold mb-6">لوحة التحكم</h1>
+<div class="page-header">
+    <h1 class="page-title">Dashboard</h1>
+    <p class="page-subtitle">Welcome back, {{ user.name or user.email }}</p>
+</div>
 
-    {# =================================================================== #}
-    {# Stat cards — memory count, entity count, links count                 #}
-    {# =================================================================== #}
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+<!-- =========================================================
+     Stats Grid — Memory count, Entity count, Links count
+     ========================================================= -->
+<div class="stats-grid">
 
-        {# Memory count card #}
-        <div class="stat bg-base-100 rounded-box shadow">
-            <div class="stat-title">الذكريات</div>
-            <div class="stat-value text-primary">{{ memory_count }}</div>
-            <div class="stat-desc">ذكرى محفوظة</div>
-        </div>
-
-        {# Entity count card #}
-        <div class="stat bg-base-100 rounded-box shadow">
-            <div class="stat-title">الكيانات</div>
-            <div class="stat-value text-secondary">{{ entity_count }}</div>
-            <div class="stat-desc">شخص ومفهوم</div>
-        </div>
-
-        {# Links count card #}
-        <div class="stat bg-base-100 rounded-box shadow">
-            <div class="stat-title">الروابط</div>
-            <div class="stat-value text-accent">{{ links_count }}</div>
-            <div class="stat-desc">علاقة في الرسم البياني</div>
-        </div>
-
+    <!-- Memory count -->
+    <div class="stat-card">
+        <div class="stat-label">Memories</div>
+        <div class="stat-value">{{ memory_count }}</div>
+        <div class="stat-desc">saved memories</div>
     </div>
 
-    {# =================================================================== #}
-    {# Recent memories — last 10                                            #}
-    {# =================================================================== #}
-    <div class="card bg-base-100 shadow">
-        <div class="card-body">
-            <div class="flex items-center justify-between mb-4">
-                <h2 class="card-title text-lg">آخر الذكريات</h2>
-                <a href="/memories" class="btn btn-ghost btn-sm">عرض الكل</a>
-            </div>
+    <!-- Entity count -->
+    <div class="stat-card secondary">
+        <div class="stat-label">Entities</div>
+        <div class="stat-value">{{ entity_count }}</div>
+        <div class="stat-desc">people & concepts</div>
+    </div>
 
-            {% if recent_memories %}
-            <div class="flex flex-col gap-3">
-                {% for memory in recent_memories %}
-                {% set category_colors = {
-                    "self": "badge-primary",
-                    "style": "badge-secondary",
-                    "preference": "badge-accent",
-                    "context": "badge-info",
-                    "decision": "badge-warning",
-                    "idea": "badge-success",
-                    "feedback": "badge-error",
-                    "domain": "badge-neutral"
-                } %}
-                {% include "partials/memory_card.html" %}
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="text-center py-8 text-gray-400">
-                <p class="text-lg mb-2">لا توجد ذكريات بعد</p>
-                <p class="text-sm">ابدأ بحفظ ذكرياتك من خلال أدوات الذكاء الاصطناعي</p>
-            </div>
-            {% endif %}
-        </div>
+    <!-- Links count -->
+    <div class="stat-card accent">
+        <div class="stat-label">Links</div>
+        <div class="stat-value">{{ links_count }}</div>
+        <div class="stat-desc">graph relationships</div>
     </div>
 
 </div>
+
+<!-- =========================================================
+     Recent Memories — last 10
+     ========================================================= -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Recent Memories</h2>
+        <a href="/memories" class="btn btn-ghost btn-sm">View All →</a>
+    </div>
+    <div class="card-body">
+        {% if recent_memories %}
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+            {% for memory in recent_memories %}
+            {% set category_class = {
+                "self": "self",
+                "style": "style",
+                "preference": "preference",
+                "context": "context",
+                "decision": "decision",
+                "idea": "idea",
+                "feedback": "feedback",
+                "domain": "domain"
+            }.get(memory.category, "domain") %}
+            <div class="memory-card" onclick="window.location.href='/memories/{{ memory.id.split(':')[-1] if ':' in memory.id|string else memory.id }}'">
+                <span class="memory-category {{ category_class }}">{{ memory.category }}</span>
+                <div class="memory-content">{{ memory.content[:200] }}{% if memory.content|length > 200 %}...{% endif %}</div>
+                <div class="memory-meta">
+                    <span>{{ memory.created_at[:10] if memory.created_at is string else memory.created_at }}</span>
+                    {% if memory.salience %}
+                    <span>• Salience: {{ '%.2f' % memory.salience }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">🧠</div>
+            <div class="empty-state-title">No memories yet</div>
+            <div class="empty-state-desc">Start saving memories through your AI tools</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
 {% endblock %}

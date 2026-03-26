@@ -1,181 +1,194 @@
 {% extends "base.html" %}
-{% block title %}تفاصيل الذكرى — Qmemory{% endblock %}
+{% block title %}Memory Details — Qmemory{% endblock %}
 {% block content %}
-<div class="max-w-4xl mx-auto">
 
-    {# --- Back link --- #}
-    <a href="/memories" class="btn btn-ghost btn-sm mb-4">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-        </svg>
-        العودة للذكريات
-    </a>
+{# --- Back link --- #}
+<a href="/memories" class="btn btn-ghost btn-sm" style="margin-bottom: 16px;">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin-left: 6px;">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+    </svg>
+    Back to Memories
+</a>
 
-    {% if memory %}
-    {# =================================================================== #}
-    {# Main content card                                                   #}
-    {# =================================================================== #}
-    <div class="card bg-base-100 shadow mb-6">
-        <div class="card-body">
-            {# --- Category badge --- #}
-            {% set badge_class = category_colors.get(memory.category, 'badge-neutral') if category_colors else 'badge-neutral' %}
-            <div class="flex items-center gap-2 mb-3">
-                <span class="badge {{ badge_class }}">{{ memory.category or 'unknown' }}</span>
-                {% if memory.scope %}
-                <span class="badge badge-outline badge-sm">{{ memory.scope }}</span>
-                {% endif %}
-            </div>
+{% if memory %}
 
-            {# --- Full content --- #}
-            <p class="text-base leading-relaxed whitespace-pre-wrap">{{ memory.content }}</p>
-        </div>
-    </div>
-
-    {# =================================================================== #}
-    {# Metadata card                                                       #}
-    {# =================================================================== #}
-    <div class="card bg-base-100 shadow mb-6">
-        <div class="card-body">
-            <h2 class="card-title text-lg mb-4">البيانات الوصفية</h2>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                {# Salience #}
-                <div>
-                    <span class="text-sm text-gray-500">الأهمية (Salience)</span>
-                    {% set salience_pct = ((memory.salience or 0) * 100)|int %}
-                    <div class="flex items-center gap-2 mt-1">
-                        <div class="w-full bg-base-200 rounded-full h-2">
-                            <div class="bg-primary rounded-full h-2" style="width: {{ salience_pct }}%"></div>
-                        </div>
-                        <span class="text-sm font-mono">{{ salience_pct }}%</span>
-                    </div>
-                </div>
-
-                {# Confidence #}
-                <div>
-                    <span class="text-sm text-gray-500">الثقة (Confidence)</span>
-                    {% set confidence_pct = ((memory.confidence or 0) * 100)|int %}
-                    <div class="flex items-center gap-2 mt-1">
-                        <div class="w-full bg-base-200 rounded-full h-2">
-                            <div class="bg-secondary rounded-full h-2" style="width: {{ confidence_pct }}%"></div>
-                        </div>
-                        <span class="text-sm font-mono">{{ confidence_pct }}%</span>
-                    </div>
-                </div>
-
-                {# Scope #}
-                <div>
-                    <span class="text-sm text-gray-500">النطاق (Scope)</span>
-                    <p class="text-sm mt-1">{{ memory.scope or 'global' }}</p>
-                </div>
-
-                {# Evidence type #}
-                <div>
-                    <span class="text-sm text-gray-500">نوع الدليل (Evidence)</span>
-                    <p class="text-sm mt-1">{{ memory.evidence_type or '—' }}</p>
-                </div>
-
-                {# Source person #}
-                <div>
-                    <span class="text-sm text-gray-500">المصدر (Source)</span>
-                    <p class="text-sm mt-1">{{ memory.source_person or '—' }}</p>
-                </div>
-
-                {# Record ID #}
-                <div>
-                    <span class="text-sm text-gray-500">المعرّف (ID)</span>
-                    <p class="text-sm mt-1 font-mono swap-dir" dir="ltr">{{ memory.id or '—' }}</p>
-                </div>
-
-                {# Created at #}
-                <div>
-                    <span class="text-sm text-gray-500">تاريخ الإنشاء</span>
-                    <p class="text-sm mt-1">
-                        {% if memory.created_at %}
-                            {{ memory.created_at[:19] if memory.created_at is string else memory.created_at }}
-                        {% else %}
-                            —
-                        {% endif %}
-                    </p>
-                </div>
-
-                {# Updated at #}
-                <div>
-                    <span class="text-sm text-gray-500">آخر تحديث</span>
-                    <p class="text-sm mt-1">
-                        {% if memory.updated_at %}
-                            {{ memory.updated_at[:19] if memory.updated_at is string else memory.updated_at }}
-                        {% else %}
-                            —
-                        {% endif %}
-                    </p>
-                </div>
-
-            </div>
-        </div>
-    </div>
-
-    {# =================================================================== #}
-    {# Linked nodes card                                                   #}
-    {# =================================================================== #}
-    <div class="card bg-base-100 shadow mb-6">
-        <div class="card-body">
-            <h2 class="card-title text-lg mb-4">
-                العقد المرتبطة
-                {% if linked_nodes %}
-                <span class="badge badge-neutral badge-sm">{{ linked_nodes|length }}</span>
-                {% endif %}
-            </h2>
-
-            {% if linked_nodes %}
-            <div class="flex flex-col gap-2">
-                {% for link in linked_nodes %}
-                <div class="flex items-start gap-3 p-3 bg-base-200 rounded-lg">
-                    {# Relationship type badge #}
-                    <span class="badge badge-outline badge-sm mt-0.5 shrink-0">{{ link.type or 'relates' }}</span>
-
-                    {# Target/source content #}
-                    <div class="flex-1 min-w-0">
-                        {% if link.target_content %}
-                        <p class="text-sm truncate">{{ link.target_content[:150] }}</p>
-                        {% elif link.source_content %}
-                        <p class="text-sm truncate">{{ link.source_content[:150] }}</p>
-                        {% endif %}
-
-                        {# Link to the connected node #}
-                        {% set link_id = (link.target_id or link.source_id or '')|string %}
-                        {% if link_id and 'memory:' in link_id %}
-                        <a href="/memories/{{ link_id.split(':')[-1] }}" class="text-xs text-primary hover:underline mt-1 inline-block">
-                            عرض الذكرى
-                        </a>
-                        {% elif link_id %}
-                        <span class="text-xs text-gray-400 mt-1 inline-block font-mono swap-dir" dir="ltr">{{ link_id }}</span>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="text-center py-6 text-gray-400">
-                <p class="text-sm">لا توجد عقد مرتبطة بهذه الذكرى</p>
-            </div>
+{# =========================================================
+     Main Content Card
+     ========================================================= #}
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-body">
+        {# --- Category & scope badges --- #}
+        {% set cat_class = {
+            "self": "self",
+            "style": "style",
+            "preference": "preference",
+            "context": "context",
+            "decision": "decision",
+            "idea": "idea",
+            "feedback": "feedback",
+            "domain": "domain"
+        }.get(memory.category, "domain") %}
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px;">
+            <span class="memory-category {{ cat_class }}">{{ memory.category or 'unknown' }}</span>
+            {% if memory.scope %}
+            <span style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); padding: 4px 10px; border: 1px solid var(--border-color); border-radius: 4px;">{{ memory.scope }}</span>
             {% endif %}
         </div>
-    </div>
 
-    {% else %}
-    {# =================================================================== #}
-    {# Memory not found                                                    #}
-    {# =================================================================== #}
-    <div class="card bg-base-100 shadow">
-        <div class="card-body text-center py-12">
-            <p class="text-lg text-gray-400 mb-2">لم يتم العثور على هذه الذكرى</p>
-            <p class="text-sm text-gray-400">المعرّف: memory:{{ memory_id }}</p>
-            <a href="/memories" class="btn btn-primary btn-sm mt-4">العودة للذكريات</a>
+        {# --- Full content --- #}
+        <div style="font-size: 1rem; line-height: 1.8; color: var(--text-primary); white-space: pre-wrap;">{{ memory.content }}</div>
+    </div>
+</div>
+
+{# =========================================================
+     Metadata Card
+     ========================================================= #}
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h2 class="card-title">Metadata</h2>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+
+            {# Salience #}
+            <div>
+                <div class="form-label">Salience</div>
+                {% set salience_pct = ((memory.salience or 0) * 100)|int %}
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                    <div style="flex: 1; height: 4px; background: var(--border-color); border-radius: 2px; overflow: hidden;">
+                        <div style="height: 100%; width: {{ salience_pct }}%; background: var(--primary-color);"></div>
+                    </div>
+                    <span style="font-family: var(--font-mono); font-size: 0.8rem;">{{ salience_pct }}%</span>
+                </div>
+            </div>
+
+            {# Confidence #}
+            <div>
+                <div class="form-label">Confidence</div>
+                {% set confidence_pct = ((memory.confidence or 0) * 100)|int %}
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                    <div style="flex: 1; height: 4px; background: var(--border-color); border-radius: 2px; overflow: hidden;">
+                        <div style="height: 100%; width: {{ confidence_pct }}%; background: var(--cat-preference);"></div>
+                    </div>
+                    <span style="font-family: var(--font-mono); font-size: 0.8rem;">{{ confidence_pct }}%</span>
+                </div>
+            </div>
+
+            {# Scope #}
+            <div>
+                <div class="form-label">Scope</div>
+                <p style="margin-top: 4px;">{{ memory.scope or 'global' }}</p>
+            </div>
+
+            {# Evidence type #}
+            <div>
+                <div class="form-label">Evidence Type</div>
+                <p style="margin-top: 4px;">{{ memory.evidence_type or '—' }}</p>
+            </div>
+
+            {# Source person #}
+            <div>
+                <div class="form-label">Source</div>
+                <p style="margin-top: 4px;">{{ memory.source_person or '—' }}</p>
+            </div>
+
+            {# Record ID #}
+            <div>
+                <div class="form-label">Record ID</div>
+                <p style="margin-top: 4px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); direction: ltr; text-align: left;">{{ memory.id or '—' }}</p>
+            </div>
+
+            {# Created at #}
+            <div>
+                <div class="form-label">Created</div>
+                <p style="margin-top: 4px;">
+                    {% if memory.created_at %}
+                        {{ memory.created_at[:19] if memory.created_at is string else memory.created_at }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </p>
+            </div>
+
+            {# Updated at #}
+            <div>
+                <div class="form-label">Last Updated</div>
+                <p style="margin-top: 4px;">
+                    {% if memory.updated_at %}
+                        {{ memory.updated_at[:19] if memory.updated_at is string else memory.updated_at }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </p>
+            </div>
+
         </div>
     </div>
-    {% endif %}
-
 </div>
+
+{# =========================================================
+     Linked Nodes Card
+     ========================================================= #}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Linked Nodes</h2>
+        {% if linked_nodes %}
+        <span style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted);">{{ linked_nodes|length }} links</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        {% if linked_nodes %}
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+            {% for link in linked_nodes %}
+            <div style="display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--bg-elevated); border-radius: 8px; border: 1px solid var(--border-color);">
+                {# Relationship type #}
+                <span style="font-family: var(--font-mono); font-size: 0.65rem; padding: 4px 10px; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-dim); white-space: nowrap;">{{ link.type or 'relates' }}</span>
+
+                {# Target/source content #}
+                <div style="flex: 1; min-width: 0;">
+                    {% if link.target_content %}
+                    <p style="font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ link.target_content[:150] }}</p>
+                    {% elif link.source_content %}
+                    <p style="font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ link.source_content[:150] }}</p>
+                    {% endif %}
+
+                    {# Link to the connected node #}
+                    {% set link_id = (link.target_id or link.source_id or '')|string %}
+                    {% if link_id and 'memory:' in link_id %}
+                    <a href="/memories/{{ link_id.split(':')[-1] }}" style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--primary-color); text-decoration: none; margin-top: 8px; display: inline-block;">View Memory →</a>
+                    {% elif link_id %}
+                    <span style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); margin-top: 8px; display: inline-block; direction: ltr;">{{ link_id }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state" style="padding: 32px;">
+            <div class="empty-state-icon" style="font-size: 2rem;">🔗</div>
+            <div class="empty-state-title">No linked nodes</div>
+            <div class="empty-state-desc">This memory has no connections yet</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% else %}
+
+{# =========================================================
+     Memory Not Found
+     ========================================================= #}
+<div class="card">
+    <div class="card-body">
+        <div class="empty-state">
+            <div class="empty-state-icon">❓</div>
+            <div class="empty-state-title">Memory Not Found</div>
+            <div class="empty-state-desc">The memory with ID <code style="color: var(--primary-color);">memory:{{ memory_id }}</code> doesn't exist or was deleted.</div>
+            <a href="/memories" class="btn btn-primary" style="margin-top: 16px;">Back to Memories</a>
+        </div>
+    </div>
+</div>
+
+{% endif %}
+
 {% endblock %}

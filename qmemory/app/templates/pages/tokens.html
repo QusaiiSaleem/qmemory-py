@@ -1,125 +1,127 @@
 {% extends "base.html" %}
-{% block title %}مفاتيح API — Qmemory{% endblock %}
+{% block title %}API Tokens — Qmemory{% endblock %}
 {% block content %}
-<div class="max-w-3xl mx-auto">
-    <h1 class="text-2xl font-bold mb-2">مفاتيح API</h1>
-    <p class="text-gray-500 mb-6">أنشئ مفاتيح لربط أدوات الذكاء الاصطناعي بذاكرتك</p>
 
-    <!-- ================================================================= -->
-    <!-- ONE-TIME token display (only shows right after generation)         -->
-    <!-- ================================================================= -->
-    {% if just_generated_token %}
-    <div class="alert alert-warning shadow-lg mb-6">
-        <div class="w-full">
-            <div class="flex items-center gap-2 mb-2">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                </svg>
-                <span class="font-bold text-lg">احفظ هذا المفتاح — لن يظهر مرة أخرى</span>
-            </div>
-            <div class="relative mt-2">
-                <code class="block bg-base-200 p-4 rounded text-sm swap-dir select-all font-mono break-all" dir="ltr">{{ just_generated_token }}</code>
-                <button
-                    class="btn btn-sm btn-ghost absolute top-2 left-2"
-                    onclick="navigator.clipboard.writeText('{{ just_generated_token }}'); this.textContent = 'تم النسخ!'; setTimeout(() => this.textContent = '📋', 2000)"
-                >📋</button>
-            </div>
-            <p class="text-sm mt-2">انسخه الآن واحفظه في مكان آمن. يمكنك استخدامه في صفحة <a href="/connect" class="link link-primary">ربط الأدوات</a>.</p>
+<div class="page-header">
+    <h1 class="page-title">API Tokens</h1>
+    <p class="page-subtitle">Create tokens to connect AI tools to your memory</p>
+</div>
+
+<!-- =========================================================
+     One-Time Token Display (only shows right after generation)
+     ========================================================= -->
+{% if just_generated_token %}
+<div class="alert alert-warning" style="margin-bottom: 24px;">
+    <div style="flex: 1;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+            <strong style="font-size: 1rem;">Save this token — it won't be shown again</strong>
         </div>
-    </div>
-    {% endif %}
-
-    <!-- ================================================================= -->
-    <!-- Generate new token form                                            -->
-    <!-- ================================================================= -->
-    <div class="card bg-base-100 shadow mb-6">
-        <div class="card-body">
-            <h2 class="card-title text-lg">إنشاء مفتاح جديد</h2>
-            <form method="post" action="/tokens/generate" class="flex gap-3 items-end">
-                <div class="form-control flex-1">
-                    <label class="label"><span class="label-text">اسم المفتاح (اختياري)</span></label>
-                    <input
-                        type="text"
-                        name="name"
-                        class="input input-bordered"
-                        placeholder="مثال: Claude Code، NanoBot"
-                        dir="auto"
-                    >
-                </div>
-                <button type="submit" class="btn btn-primary">إنشاء مفتاح</button>
-            </form>
+        <div class="code-block copyable">
+            <code id="new-token">{{ just_generated_token }}</code>
+            <button class="copy-btn" onclick="navigator.clipboard.writeText('{{ just_generated_token }}'); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
         </div>
-    </div>
-
-    <!-- ================================================================= -->
-    <!-- Token list table                                                   -->
-    <!-- ================================================================= -->
-    <div class="card bg-base-100 shadow">
-        <div class="card-body">
-            <h2 class="card-title text-lg mb-4">المفاتيح الحالية</h2>
-
-            {% if tokens %}
-            <div class="overflow-x-auto">
-                <table class="table table-zebra">
-                    <thead>
-                        <tr>
-                            <th>البادئة</th>
-                            <th>الاسم</th>
-                            <th>تاريخ الإنشاء</th>
-                            <th>آخر استخدام</th>
-                            <th>تاريخ الانتهاء</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="tokens-list">
-                        {% for token in tokens %}
-                        <tr id="token-row-{{ token.id.split(':')[-1] if ':' in token.id|string else token.id }}">
-                            <td>
-                                <code class="swap-dir text-sm" dir="ltr">{{ token.prefix }}...</code>
-                            </td>
-                            <td>{{ token.name or '—' }}</td>
-                            <td class="text-sm">
-                                {% if token.created_at %}
-                                    {{ token.created_at[:10] if token.created_at is string else token.created_at }}
-                                {% else %}
-                                    —
-                                {% endif %}
-                            </td>
-                            <td class="text-sm">
-                                {% if token.last_used %}
-                                    {{ token.last_used[:10] if token.last_used is string else token.last_used }}
-                                {% else %}
-                                    <span class="text-gray-400">لم يُستخدم بعد</span>
-                                {% endif %}
-                            </td>
-                            <td class="text-sm">
-                                {% if token.expires_at %}
-                                    {{ token.expires_at[:10] if token.expires_at is string else token.expires_at }}
-                                {% else %}
-                                    —
-                                {% endif %}
-                            </td>
-                            <td>
-                                <button
-                                    class="btn btn-error btn-sm btn-outline"
-                                    hx-delete="/tokens/{{ token.id.split(':')[-1] if ':' in token.id|string else token.id }}"
-                                    hx-target="#token-row-{{ token.id.split(':')[-1] if ':' in token.id|string else token.id }}"
-                                    hx-swap="outerHTML"
-                                    hx-confirm="هل أنت متأكد من حذف هذا المفتاح؟ لن تتمكن من استخدامه مرة أخرى."
-                                >إلغاء</button>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="text-center py-8 text-gray-400">
-                <p class="text-lg mb-2">لا توجد مفاتيح بعد</p>
-                <p class="text-sm">أنشئ مفتاحك الأول أعلاه لبدء ربط أدواتك</p>
-            </div>
-            {% endif %}
-        </div>
+        <p style="font-size: 0.8rem; margin-top: 12px; color: var(--text-muted);">
+            Copy this token and save it securely. Use it on the <a href="/connect" style="color: var(--primary-color);">Connect</a> page to link your AI tools.
+        </p>
     </div>
 </div>
+{% endif %}
+
+<!-- =========================================================
+     Generate New Token Form
+     ========================================================= -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-body">
+        <h2 class="card-title" style="margin-bottom: 16px;">Generate New Token</h2>
+        <form method="post" action="/tokens/generate" style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
+            <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;">
+                <label class="form-label" for="token-name">Token Name (optional)</label>
+                <input
+                    type="text"
+                    id="token-name"
+                    name="name"
+                    class="form-input"
+                    placeholder="e.g., Claude Code, NanoBot"
+                    dir="auto"
+                >
+            </div>
+            <button type="submit" class="btn btn-primary">Generate Token</button>
+        </form>
+    </div>
+</div>
+
+<!-- =========================================================
+     Token List Table
+     ========================================================= -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Active Tokens</h2>
+    </div>
+    <div class="card-body">
+        {% if tokens %}
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Prefix</th>
+                        <th>Name</th>
+                        <th>Created</th>
+                        <th>Last Used</th>
+                        <th>Expires</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="tokens-list">
+                    {% for token in tokens %}
+                    <tr id="token-row-{{ token.id.split(':')[-1] if ':' in token.id|string else token.id }}">
+                        <td><code>{{ token.prefix }}...</code></td>
+                        <td>{{ token.name or '—' }}</td>
+                        <td>
+                            {% if token.created_at %}
+                            {{ token.created_at[:10] if token.created_at is string else token.created_at }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if token.last_used %}
+                            {{ token.last_used[:10] if token.last_used is string else token.last_used }}
+                            {% else %}
+                            <span style="color: var(--text-muted);">Never used</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if token.expires_at %}
+                            {{ token.expires_at[:10] if token.expires_at is string else token.expires_at }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button
+                                class="btn btn-danger btn-sm"
+                                hx-delete="/tokens/{{ token.id.split(':')[-1] if ':' in token.id|string else token.id }}"
+                                hx-target="#token-row-{{ token.id.split(':')[-1] if ':' in token.id|string else token.id }}"
+                                hx-swap="outerHTML"
+                                hx-confirm="Are you sure you want to revoke this token? It cannot be undone."
+                            >Revoke</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">🔑</div>
+            <div class="empty-state-title">No tokens yet</div>
+            <div class="empty-state-desc">Generate your first token above to start connecting your AI tools</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
 {% endblock %}

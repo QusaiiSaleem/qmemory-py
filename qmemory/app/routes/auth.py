@@ -29,6 +29,10 @@ from surrealdb import AsyncSurreal
 
 from qmemory.app.config import get_app_settings
 
+# Note: provision_user_db is available in the feat/qmemory-cloud branch
+# For now, user databases are provisioned on first MCP call
+# from qmemory.db.provision import provision_user_db
+
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -392,6 +396,21 @@ async def signup_submit(request: Request):
             user_info["email"] = email
         if not user_info["name"]:
             user_info["name"] = name
+
+        # Create the user's private database with full memory schema
+        # TODO: Enable when provision.py is available
+        # try:
+        #     await provision_user_db(user_info["user_id"])
+        #     logger.info("auth.user_db_provisioned user_id=%s", user_info["user_id"])
+        # except Exception as exc:
+        #     logger.error(
+        #         "auth.user_db_provision_failed user_id=%s reason=%s",
+        #         user_info["user_id"],
+        #         exc,
+        #     )
+        #     # Don't fail signup — user can still use the web UI
+        #     # Database can be provisioned later on first MCP call
+        logger.info("auth.signup_complete user_id=%s (DB provisioning deferred)", user_info["user_id"])
 
         # Store user info in the session cookie
         request.session["user_id"] = user_info["user_id"]
