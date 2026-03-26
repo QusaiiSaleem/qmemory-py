@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Authorize App — Qmemory{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1 class="page-title">Authorize {{ client.name or client_id }}</h1>
+    <p class="page-subtitle">This app wants to access your Qmemory account</p>
+</div>
+
+<div class="card" style="max-width: 500px; margin: 0 auto;">
+    <div class="card-body">
+        <!-- App Info -->
+        <div style="text-align: center; margin-bottom: 32px;">
+            <div style="font-size: 3rem; margin-bottom: 16px;">🔐</div>
+            <h2 style="margin-bottom: 8px; color: var(--primary-color);">{{ client.name or client_id }}</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem;">by Anthropic</p>
+        </div>
+
+        <!-- Permissions Requested -->
+        <div style="background: var(--bg-elevated); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+            <h3 style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px;">
+                This app will be able to:
+            </h3>
+            <ul style="list-style: none; padding: 0; margin: 0;">
+                <li style="padding: 8px 0; color: var(--text-color); display: flex; align-items: center; gap: 12px;">
+                    <span style="color: var(--primary-color);">✓</span>
+                    Read your memories and knowledge graph
+                </li>
+                <li style="padding: 8px 0; color: var(--text-color); display: flex; align-items: center; gap: 12px;">
+                    <span style="color: var(--primary-color);">✓</span>
+                    Save new memories to your account
+                </li>
+                <li style="padding: 8px 0; color: var(--text-color); display: flex; align-items: center; gap: 12px;">
+                    <span style="color: var(--primary-color);">✓</span>
+                    Search your memory history
+                </li>
+            </ul>
+        </div>
+
+        <!-- Security Note -->
+        <div style="background: rgba(0, 255, 170, 0.05); border: 1px solid rgba(0, 255, 170, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <p style="font-size: 0.8rem; color: var(--text-dim); margin: 0;">
+                <strong style="color: var(--primary-color);">🔒 Your data stays private.</strong>
+                This app will only have access to your own memories, not anyone else's.
+                You can revoke access anytime from the Tokens page.
+            </p>
+        </div>
+
+        <!-- Consent Form -->
+        <form method="post" action="/oauth/consent">
+            <input type="hidden" name="client_id" value="{{ client_id }}">
+            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+            <input type="hidden" name="scope" value="{{ scope }}">
+            {% if state %}<input type="hidden" name="state" value="{{ state }}">{% endif %}
+            {% if code_challenge %}<input type="hidden" name="code_challenge" value="{{ code_challenge }}">{% endif %}
+            {% if code_challenge_method %}<input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}">{% endif %}
+
+            <div style="display: flex; gap: 12px;">
+                <button type="submit" name="deny" value="1"
+                    style="flex: 1; padding: 14px; background: transparent; border: 1px solid var(--border-color); color: var(--text-dim); border-radius: 6px; font-family: var(--font-mono); cursor: pointer; transition: all 0.2s;">
+                    Deny
+                </button>
+                <button type="submit" name="allow" value="1"
+                    style="flex: 1; padding: 14px; background: var(--primary-color); border: none; color: var(--bg-color); border-radius: 6px; font-family: var(--font-mono); font-weight: 600; cursor: pointer; transition: all 0.2s;">
+                    Allow Access
+                </button>
+            </div>
+        </form>
+
+        <!-- Footer -->
+        <p style="text-align: center; margin-top: 24px; font-size: 0.75rem; color: var(--text-muted);">
+            Signed in as <strong style="color: var(--text-dim);">{{ user.email }}</strong>
+            · <a href="/logout" style="color: var(--primary-dim);">Sign out</a>
+        </p>
+    </div>
+</div>
+
+{% endblock %}

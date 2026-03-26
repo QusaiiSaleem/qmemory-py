@@ -25,14 +25,20 @@ import fastmcp
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
+from qmemory.app.auth import resolve_api_token
 from qmemory.app.config import get_app_settings
 from qmemory.app.routes.auth import get_session_user, router as auth_router
 from qmemory.app.routes.connect import router as connect_router
 from qmemory.app.routes.dashboard import router as dashboard_router
 from qmemory.app.routes.memories import router as memories_router
+from qmemory.app.routes.oauth import router as oauth_router
 from qmemory.app.routes.tokens import router as tokens_router
-from qmemory.db.client import is_healthy
+from qmemory.db.client import _user_db, is_healthy
+from qmemory.db.provision import provision_user_db
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -418,11 +424,13 @@ api.include_router(connect_router)
 api.include_router(dashboard_router)
 api.include_router(memories_router)
 api.include_router(tokens_router)
+api.include_router(oauth_router)
 logger.info("Auth routes included: /login, /signup, /logout")
 logger.info("Connect route included: /connect")
 logger.info("Dashboard route included: /dashboard")
 logger.info("Memory routes included: /memories, /memories/search, /memories/{id}")
 logger.info("Tokens routes included: /tokens, /tokens/generate, /tokens/{id}")
+logger.info("OAuth routes included: /authorize, /consent, /token")
 
 
 # ---------------------------------------------------------------------------
@@ -458,8 +466,93 @@ async def health_check():
     }
 
 
+# ---------------------------------------------------------------------------
+# MCP Auth Middleware — validates API token and provisions user database
+# ---------------------------------------------------------------------------
+# Every request to /mcp/ must include:
+#   Authorization: Bearer qm_ak_xxxxx
+#
+# The middleware:
+# 1. Validates the token against api_token table
+# 2. Provisions user database if it doesn't exist
+# 3. Sets _user_db context var to route all DB calls to user's private database
+
+
+class MCPAuthMiddleware:
+    """ASGI middleware that validates API token and provisions user database."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = StarletteRequest(scope)
+
+        try:
+            user = await resolve_api_token(request)
+        except Exception as exc:
+            # resolve_api_token raises HTTPException on invalid token
+            status = getattr(exc, "status_code", 401)
+            detail = getattr(exc, "detail", "Authentication failed")
+            response = JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": detail},
+                },
+                status_code=status,
+            )
+            await response(scope, receive, send)
+            return
+
+        if user is None:
+            # No token provided — require it for MCP access
+            response = JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32600,
+                        "message": "Authorization required. Use: Authorization: Bearer qm_ak_xxx",
+                    },
+                },
+                status_code=401,
+            )
+            await response(scope, receive, send)
+            return
+
+        # Token valid — provision database and set routing
+        user_id = user.get("id", "")
+        if user_id and user_id.startswith("user:"):
+            raw_id = user_id[5:]  # Strip "user:" prefix
+            db_name = f"user_{raw_id}"
+
+            # Provision database if it doesn't exist (idempotent)
+            try:
+                await provision_user_db(raw_id)
+                logger.debug("mcp.db_provisioned user_id=%s db=%s", raw_id, db_name)
+            except Exception as exc:
+                logger.warning(
+                    "mcp.db_provision_failed user_id=%s reason=%s (continuing anyway)",
+                    raw_id,
+                    exc,
+                )
+
+            # Set the context var so all get_db() calls route to user's database
+            _user_db.set(db_name)
+            logger.debug("mcp.db_routing user_id=%s db=%s", raw_id, db_name)
+        else:
+            logger.warning("mcp.missing_user_id user=%s", user)
+
+        # Pass through to the MCP app
+        await self.app(scope, receive, send)
+
+
 # Mount the MCP sub-app at /mcp/ inside the FastAPI app.
 # The MCP endpoint will be accessible at /mcp/mcp/ (mount path + internal path).
-api.mount("/mcp", mcp_app)
+api.mount("/mcp", MCPAuthMiddleware(mcp_app))
 
-logger.info("Qmemory Cloud app created — MCP mounted at /mcp/")
+logger.info("Qmemory Cloud app created — MCP mounted at /mcp/ (auth required)")

@@ -80,20 +80,40 @@
 
             <p class="page-subtitle" style="margin-bottom: 8px;">Step 1: Open Claude.ai → Settings → Integrations</p>
             <p class="page-subtitle" style="margin-bottom: 8px;">Step 2: Click "Add MCP Server"</p>
-            <p class="page-subtitle" style="margin-bottom: 16px;">Step 3: Paste this URL:</p>
+            <p class="page-subtitle" style="margin-bottom: 8px;">Step 3: Fill in the form:</p>
 
-            <div class="code-block copyable">
-                <code>https://mem0.qusai.org/mcp/</code>
-                <button class="copy-btn" onclick="navigator.clipboard.writeText('https://mem0.qusai.org/mcp/'); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
+            <div style="background: var(--bg-elevated); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                        <td style="padding: 8px 0; color: var(--text-dim); font-size: 0.8rem;">Server Name</td>
+                        <td style="padding: 8px 0; font-family: var(--font-mono); color: var(--primary-color);">qmemory</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: var(--text-dim); font-size: 0.8rem;">Server URL</td>
+                        <td style="padding: 8px 0; font-family: var(--font-mono); color: var(--primary-color); font-size: 0.85rem;">https://mem0.qusai.org/mcp/</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: var(--text-dim); font-size: 0.8rem;">OAuth Client ID</td>
+                        <td style="padding: 8px 0; font-family: var(--font-mono); color: var(--primary-color);">claude-ai</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: var(--text-dim); font-size: 0.8rem;">OAuth Client Secret</td>
+                        <td style="padding: 8px 0; font-family: var(--font-mono); color: var(--primary-color); font-size: 0.85rem;">Mx6fGNy_kbJ9EUpxQQtlN8W8JeYmQ7T_6cawlwx6qzU</td>
+                    </tr>
+                </table>
             </div>
 
-            <p class="page-subtitle" style="margin-top: 20px; margin-bottom: 16px;">Step 4: Add this header:</p>
-            <div class="code-block copyable">
-                <code>Authorization: Bearer {{ token }}</code>
-                <button class="copy-btn" onclick="navigator.clipboard.writeText('Authorization: Bearer {{ token }}'); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
-            </div>
+            <p class="page-subtitle" style="margin-top: 20px;">Step 4: Click "Connect" — you'll be redirected to authorize</p>
+            <p class="page-subtitle" style="margin-top: 8px;">Step 5: Log in with your Qmemory account and click "Allow"</p>
+            <p class="page-subtitle" style="margin-top: 20px;">Step 6: Test it — ask Claude "bootstrap my memory"</p>
 
-            <p class="page-subtitle" style="margin-top: 20px;">Step 5: Test it — ask Claude "bootstrap my memory"</p>
+            <div style="border-top: 1px solid var(--border-color); margin: 24px 0;"></div>
+
+            <p style="font-size: 0.8rem; color: var(--text-muted);">
+                <strong>Note:</strong> The OAuth Client Secret is public and safe to share.
+                It's used with the Authorization Code flow to verify the client identity.
+                Your personal access token is generated fresh during the OAuth flow.
+            </p>
         </div>
     </div>
 

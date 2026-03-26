@@ -21,6 +21,7 @@ import random
 import string
 import time
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,11 @@ from qmemory.config import get_settings
 
 # Logger for this module — all warnings/errors go here
 logger = logging.getLogger(__name__)
+
+# Per-request database override. Set by MCPAuthMiddleware to route each
+# authenticated request to the user's private database (qmemory/user_{id}).
+# When not set, get_db() falls back to settings.surreal_db (usually "main").
+_user_db: ContextVar[str | None] = ContextVar("_user_db", default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +63,9 @@ async def get_db(namespace: str | None = None, database: str | None = None):
     """
     settings = get_settings()
 
-    # Use provided overrides, or fall back to settings
+    # Use provided overrides, or context var, or fall back to settings
     ns = namespace or settings.surreal_ns
-    db_name = database or settings.surreal_db
+    db_name = database or _user_db.get() or settings.surreal_db
 
     # Create a fresh connection to the SurrealDB WebSocket endpoint
     db = AsyncSurreal(settings.surreal_url)

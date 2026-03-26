@@ -1,0 +1,416 @@
+"""
+OAuth 2.0 Routes — Authorization Code Flow for Claude.ai
+
+Implements the standard OAuth 2.0 Authorization Code Flow:
+1. GET /oauth/authorize - Show consent page (or redirect to login)
+2. POST /oauth/consent - Handle user's consent decision
+3. POST /oauth/token - Exchange authorization code for access token
+
+The access tokens generated are the same qm_ak_xxx format used for manual tokens,
+so the existing auth middleware works unchanged.
+
+See: https://datatracker.ietf.org/doc/html/rfc6749
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from qmemory.app.routes.auth import get_session_user
+from qmemory.auth import generate_api_token, hash_token
+from qmemory.db.client import get_db, query
+
+# ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["oauth"])  # No prefix - routes at /authorize, /token, /consent
+
+# Jinja2 templates
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+# Authorization code expiration (10 minutes)
+AUTHORIZATION_CODE_EXPIRES_MINUTES = 10
+
+# Access token expiration (30 days, same as manual tokens)
+ACCESS_TOKEN_EXPIRES_DAYS = 30
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _generate_auth_code() -> str:
+    """Generate a random 32-character authorization code."""
+    return secrets.token_urlsafe(24)[:32]
+
+
+def _verify_pkce(code_verifier: str, code_challenge: str, method: str) -> bool:
+    """Verify PKCE code verifier against challenge."""
+    if method == "plain":
+        return code_verifier == code_challenge
+    elif method == "S256":
+        # SHA-256 of verifier, base64url-encoded without padding
+        digest = hashlib.sha256(code_verifier.encode()).digest()
+        import base64
+
+        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode() == code_challenge
+    return False
+
+
+async def _get_client_by_id(client_id: str) -> dict | None:
+    """Fetch OAuth client by ID."""
+    async with get_db() as db:
+        result = await query(
+            db,
+            "SELECT * FROM oauth_client WHERE id = type::record('oauth_client', $client_id) LIMIT 1",
+            {"client_id": client_id},
+        )
+        if result and isinstance(result, list) and len(result) > 0:
+            return result[0]
+    return None
+
+
+async def _create_authorization_code(
+    client_id: str,
+    user_id: str,
+    redirect_uri: str,
+    scope: str,
+    state: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+) -> str:
+    """Create an authorization code and return it."""
+    code = _generate_auth_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=AUTHORIZATION_CODE_EXPIRES_MINUTES
+    )
+
+    async with get_db() as db:
+        await query(
+            db,
+            "CREATE oauth_authorization_code CONTENT {"
+            "  code: $code,"
+            "  client_id: type::record('oauth_client', $client_id),"
+            "  user_id: type::record('user', $user_id),"
+            "  redirect_uri: $redirect_uri,"
+            "  scope: $scope,"
+            "  state: $state,"
+            "  code_challenge: $code_challenge,"
+            "  code_challenge_method: $code_challenge_method,"
+            "  expires_at: $expires_at,"
+            "  used: false"
+            "}",
+            {
+                "code": code,
+                "client_id": client_id,
+                "user_id": user_id,
+                "redirect_uri": redirect_uri,
+                "scope": scope,
+                "state": state,
+                "code_challenge": code_challenge,
+                "code_challenge_method": code_challenge_method,
+                "expires_at": expires_at.isoformat(),
+            },
+        )
+
+    return code
+
+
+async def _get_and_consume_auth_code(code: str) -> dict | None:
+    """Get authorization code and mark it as used (prevents replay)."""
+    async with get_db() as db:
+        # Fetch the code
+        result = await query(
+            db,
+            "SELECT * FROM oauth_authorization_code "
+            "WHERE code = $code AND used = false AND expires_at > time::now() "
+            "LIMIT 1",
+            {"code": code},
+        )
+
+        if not result or not isinstance(result, list) or len(result) == 0:
+            return None
+
+        auth_code = result[0]
+
+        # Mark as used
+        await query(
+            db,
+            "UPDATE $id SET used = true",
+            {"id": auth_code["id"]},
+        )
+
+        return auth_code
+
+
+# ---------------------------------------------------------------------------
+# GET /oauth/authorize - Start OAuth flow
+# ---------------------------------------------------------------------------
+
+
+@router.get("/authorize", response_class=HTMLResponse)
+async def authorize(
+    request: Request,
+    response_type: str,
+    client_id: str,
+    redirect_uri: str,
+    scope: str = "read write",
+    state: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+):
+    """
+    OAuth 2.0 Authorization Endpoint.
+
+    If user is logged in, show consent page.
+    If not logged in, redirect to login page with return URL.
+    """
+    # Validate response_type
+    if response_type != "code":
+        raise HTTPException(400, "Unsupported response_type. Only 'code' is supported.")
+
+    # Validate client
+    client = await _get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(400, f"Unknown client_id: {client_id}")
+
+    # Validate redirect_uri
+    allowed_uris = client.get("redirect_uris", [])
+    if redirect_uri not in allowed_uris:
+        raise HTTPException(400, "Invalid redirect_uri for this client.")
+
+    logger.info(
+        "oauth.authorize_request client=%s redirect=%s scope=%s",
+        client_id,
+        redirect_uri,
+        scope,
+    )
+
+    # Check if user is logged in
+    user = get_session_user(request)
+    if not user:
+        # Redirect to login with return URL
+        login_url = (
+            f"/login?return_to=/oauth/authorize"
+            f"&response_type={response_type}"
+            f"&client_id={client_id}"
+            f"&redirect_uri={redirect_uri}"
+            f"&scope={scope}"
+        )
+        if state:
+            login_url += f"&state={state}"
+        if code_challenge:
+            login_url += f"&code_challenge={code_challenge}"
+        if code_challenge_method:
+            login_url += f"&code_challenge_method={code_challenge_method}"
+
+        return RedirectResponse(login_url, status_code=302)
+
+    # User is logged in - show consent page
+    return templates.TemplateResponse(
+        request,
+        "pages/oauth_consent.html",
+        context={
+            "user": user,
+            "client": client,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /oauth/consent - Handle consent decision
+# ---------------------------------------------------------------------------
+
+
+@router.post("/consent", response_class=HTMLResponse)
+async def consent(
+    request: Request,
+    client_id: str = Form(...),
+    redirect_uri: str = Form(...),
+    scope: str = Form("read write"),
+    state: str | None = Form(None),
+    code_challenge: str | None = Form(None),
+    code_challenge_method: str | None = Form(None),
+    allow: str | None = Form(None),  # Present if user clicked "Allow"
+    deny: str | None = Form(None),  # Present if user clicked "Deny"
+):
+    """Handle user's consent decision."""
+    user = get_session_user(request)
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+
+    client = await _get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(400, "Unknown client")
+
+    # User denied access
+    if deny is not None:
+        logger.info("oauth.consent_denied user=%s client=%s", user.get("email"), client_id)
+        error_url = f"{redirect_uri}?error=access_denied"
+        if state:
+            error_url += f"&state={state}"
+        return RedirectResponse(error_url, status_code=302)
+
+    # User allowed - generate authorization code
+    if allow is not None:
+        user_id = user.get("user_id", "")
+        if ":" in user_id:
+            user_id = user_id.split(":")[-1]
+
+        code = await _create_authorization_code(
+            client_id=client_id,
+            user_id=user_id,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            state=state,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+        )
+
+        logger.info(
+            "oauth.consent_allowed user=%s client=%s code_created=true",
+            user.get("email"),
+            client_id,
+        )
+
+        # Redirect back to client with authorization code
+        callback_url = f"{redirect_uri}?code={code}"
+        if state:
+            callback_url += f"&state={state}"
+
+        return RedirectResponse(callback_url, status_code=302)
+
+    # Neither allow nor deny - shouldn't happen
+    raise HTTPException(400, "Invalid consent submission")
+
+
+# ---------------------------------------------------------------------------
+# POST /oauth/token - Exchange code for access token
+# ---------------------------------------------------------------------------
+
+
+@router.post("/token")
+async def token(
+    grant_type: str = Form(...),
+    code: str | None = Form(None),
+    redirect_uri: str | None = Form(None),
+    client_id: str = Form(...),
+    client_secret: str = Form(...),
+    code_verifier: str | None = Form(None),
+):
+    """
+    OAuth 2.0 Token Endpoint.
+
+    Exchanges an authorization code for an access token.
+    The access token is a standard qm_ak_xxx token that works
+    with the existing auth middleware.
+    """
+    # Validate grant_type
+    if grant_type != "authorization_code":
+        return {"error": "unsupported_grant_type", "error_description": "Only 'authorization_code' is supported"}
+
+    # Validate client credentials
+    client = await _get_client_by_id(client_id)
+    if not client:
+        return {"error": "invalid_client", "error_description": "Unknown client"}
+
+    # Verify client secret
+    secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
+    if secret_hash != client.get("secret_hash"):
+        return {"error": "invalid_client", "error_description": "Invalid client secret"}
+
+    # Validate authorization code
+    if not code:
+        return {"error": "invalid_request", "error_description": "Missing authorization code"}
+
+    auth_code = await _get_and_consume_auth_code(code)
+    if not auth_code:
+        return {"error": "invalid_grant", "error_description": "Invalid or expired authorization code"}
+
+    # Validate client_id matches
+    auth_client_id = auth_code.get("client_id", "")
+    if isinstance(auth_client_id, dict):
+        auth_client_id = auth_client_id.get("id", "")
+    if auth_client_id != client_id and not auth_client_id.endswith(f":{client_id}"):
+        return {"error": "invalid_grant", "error_description": "Authorization code was issued to a different client"}
+
+    # Validate redirect_uri matches
+    if redirect_uri != auth_code.get("redirect_uri"):
+        return {"error": "invalid_grant", "error_description": "Redirect URI mismatch"}
+
+    # Validate PKCE if used
+    if auth_code.get("code_challenge"):
+        if not code_verifier:
+            return {"error": "invalid_grant", "error_description": "PKCE code_verifier required"}
+        if not _verify_pkce(
+            code_verifier,
+            auth_code["code_challenge"],
+            auth_code.get("code_challenge_method", "S256"),
+        ):
+            return {"error": "invalid_grant", "error_description": "PKCE verification failed"}
+
+    # Get user ID from auth code
+    user_id = auth_code.get("user_id", "")
+    if isinstance(user_id, dict):
+        user_id = user_id.get("id", "")
+    if ":" in user_id:
+        user_id = user_id.split(":")[-1]
+
+    # Generate access token (same format as manual tokens)
+    access_token = generate_api_token()
+
+    # Calculate expiration
+    expires_at = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRES_DAYS)
+
+    # Store token in api_token table
+    async with get_db() as db:
+        await query(
+            db,
+            "CREATE api_token CONTENT {"
+            "  user: type::record('user', $user_id),"
+            "  token_hash: $token_hash,"
+            "  prefix: $prefix,"
+            "  name: $name,"
+            "  expires_at: $expires_at"
+            "}",
+            {
+                "user_id": user_id,
+                "token_hash": hash_token(access_token),
+                "prefix": access_token[:10],
+                "name": f"OAuth: {client.get('name', client_id)}",
+                "expires_at": expires_at.isoformat(),
+            },
+        )
+
+    logger.info(
+        "oauth.token_issued client=%s user_id=%s prefix=%s",
+        client_id,
+        user_id,
+        access_token[:10],
+    )
+
+    # Return OAuth 2.0 token response
+    return {
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": int(timedelta(days=ACCESS_TOKEN_EXPIRES_DAYS).total_seconds()),
+        "scope": auth_code.get("scope", "read write"),
+    }
