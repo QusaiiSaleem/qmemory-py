@@ -469,6 +469,12 @@ async def register_client(request: Request):
     We generate a unique client_id and store the client in the database.
     No client_secret is needed — Claude.ai uses PKCE (public client).
     """
+    # Block registration when bypass mode is on — forces Claude.ai to
+    # skip OAuth and connect to /mcp/ directly without auth.
+    from qmemory.app.config import get_app_settings
+    if get_app_settings().bypass_key:
+        return JSONResponse({"error": "registration_disabled"}, status_code=404)
+
     body = await request.json()
 
     client_name = body.get("client_name", "Unknown Client")
