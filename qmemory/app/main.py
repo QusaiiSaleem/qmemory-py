@@ -25,20 +25,14 @@ import fastmcp
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.requests import Request as StarletteRequest
-from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
 
-from qmemory.app.auth import resolve_api_token
 from qmemory.app.config import get_app_settings
 from qmemory.app.routes.auth import get_session_user, router as auth_router
 from qmemory.app.routes.connect import router as connect_router
 from qmemory.app.routes.dashboard import router as dashboard_router
 from qmemory.app.routes.memories import router as memories_router
-from qmemory.app.routes.oauth import router as oauth_router
 from qmemory.app.routes.tokens import router as tokens_router
-from qmemory.db.client import _user_db, get_db, is_healthy, query
-from qmemory.db.provision import provision_user_db
+from qmemory.db.client import is_healthy
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -429,7 +423,7 @@ api.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
     allow_headers=["*"],
-    expose_headers=["Mcp-Session-Id", "WWW-Authenticate"],
+    expose_headers=["Mcp-Session-Id"],
     max_age=86400,  # Cache preflight for 24 hours
 )
 logger.info("CORS middleware enabled — allowing all origins for OAuth/MCP")
@@ -442,13 +436,11 @@ api.include_router(connect_router)
 api.include_router(dashboard_router)
 api.include_router(memories_router)
 api.include_router(tokens_router)
-api.include_router(oauth_router)
 logger.info("Auth routes included: /login, /signup, /logout")
 logger.info("Connect route included: /connect")
 logger.info("Dashboard route included: /dashboard")
 logger.info("Memory routes included: /memories, /memories/search, /memories/{id}")
 logger.info("Tokens routes included: /tokens, /tokens/generate, /tokens/{id}")
-logger.info("OAuth routes included: /authorize, /consent, /token")
 
 
 # ---------------------------------------------------------------------------
@@ -463,67 +455,6 @@ async def root_redirect(request: Request):
     if user:
         return RedirectResponse(url="/dashboard", status_code=302)
     return RedirectResponse(url="/login", status_code=302)
-
-
-def _get_base_url(request: Request) -> str:
-    """
-    Get the public-facing base URL, respecting reverse proxy headers.
-
-    Railway (and other proxies) terminate TLS and forward requests as HTTP.
-    The app sees http:// but the public URL is https://. We check
-    X-Forwarded-Proto to detect this.
-    """
-    base_url = str(request.base_url).rstrip("/")
-    # Railway sets X-Forwarded-Proto: https when TLS is terminated at the proxy
-    proto = request.headers.get("x-forwarded-proto", "")
-    if proto == "https" and base_url.startswith("http://"):
-        base_url = "https://" + base_url[7:]
-    return base_url
-
-
-@api.get("/.well-known/oauth-authorization-server")
-async def oauth_metadata(request: Request):
-    """
-    OAuth 2.0 Authorization Server Metadata (RFC 8414).
-
-    Claude.ai uses this to discover our OAuth endpoints automatically.
-    It tells the MCP client where to send users for authorization,
-    where to register as a client, and where to exchange codes for tokens.
-    """
-    base_url = _get_base_url(request)
-
-    logger.info("oauth.metadata_requested base_url=%s", base_url)
-
-    return {
-        "issuer": base_url,
-        "authorization_endpoint": f"{base_url}/authorize",
-        "token_endpoint": f"{base_url}/token",
-        "registration_endpoint": f"{base_url}/register",
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
-        "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
-        "scopes_supported": ["read", "write"],
-    }
-
-
-@api.get("/.well-known/oauth-protected-resource")
-async def oauth_protected_resource(request: Request):
-    """
-    OAuth 2.0 Protected Resource Metadata (RFC 9728).
-
-    Tells MCP clients where the authorization server is for this resource.
-    """
-    base_url = _get_base_url(request)
-
-    logger.info("oauth.protected_resource_requested base_url=%s", base_url)
-
-    return {
-        "resource": base_url,
-        "authorization_servers": [base_url],
-        "scopes_supported": ["read", "write"],
-        "bearer_methods_supported": ["header"],  # Authorization: Bearer <token>
-    }
 
 
 @api.get("/health")
@@ -546,159 +477,10 @@ async def health_check():
 
 
 # ---------------------------------------------------------------------------
-# MCP Auth Middleware — validates API token and provisions user database
+# Mount MCP — no auth, open access
 # ---------------------------------------------------------------------------
-# Every request to /mcp/ must include:
-#   Authorization: Bearer qm_ak_xxxxx
-#
-# The middleware:
-# 1. Validates the token against api_token table
-# 2. Provisions user database if it doesn't exist
-# 3. Sets _user_db context var to route all DB calls to user's private database
+# MCP is mounted directly without any auth middleware.
+# Anyone with the URL can use the MCP tools.
+api.mount("/mcp", mcp_app)
 
-
-class MCPAuthMiddleware:
-    """ASGI middleware that validates API token and provisions user database."""
-
-    def __init__(self, app: ASGIApp):
-        self.app = app
-
-    async def _resolve_bypass_user(self) -> dict | None:
-        """Look up the bypass user from the database by email.
-
-        Only called when QMEMORY_BYPASS_KEY is set and the request
-        includes a matching ?key= parameter.
-        """
-        settings = get_app_settings()
-        async with get_db() as db:
-            result = await query(
-                db,
-                "SELECT * FROM user WHERE email = $email LIMIT 1",
-                {"email": settings.bypass_user},
-            )
-            if result and isinstance(result, list) and len(result) > 0:
-                return result[0]
-        return None
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        request = StarletteRequest(scope)
-
-        # NOTE: CORS preflight (OPTIONS) is handled by CORSMiddleware on the
-        # FastAPI app — it intercepts OPTIONS before requests reach this middleware.
-        # No duplicate CORS handling needed here.
-
-        # Log all MCP requests for debugging
-        logger.info(
-            "mcp.request method=%s path=%s has_auth=%s",
-            request.method,
-            request.url.path,
-            "authorization" in request.headers,
-        )
-
-        try:
-            user = await resolve_api_token(request)
-        except Exception as exc:
-            # resolve_api_token raises HTTPException on invalid token
-            status = getattr(exc, "status_code", 401)
-            detail = getattr(exc, "detail", "Authentication failed")
-            logger.warning("mcp.auth_failed reason=%s", detail)
-            response = JSONResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32600, "message": detail},
-                },
-                status_code=status,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            await response(scope, receive, send)
-            return
-
-        if user is None:
-            # --- OAuth bypass (temporary single-user mode) ---
-            # When QMEMORY_BYPASS_KEY env var exists, skip OAuth entirely
-            # and route all unauthenticated requests to the bypass user.
-            # This is a workaround for Claude.ai's broken OAuth flow.
-            #
-            # TO RE-ENABLE MULTI-USER OAUTH:
-            #   1. Run: railway variables delete QMEMORY_BYPASS_KEY --service qmemory-api
-            #   2. bypass_key becomes None → this block is skipped
-            #   3. Normal 401 + OAuth flow takes over automatically
-            settings = get_app_settings()
-            if settings.bypass_key:
-                bypass_user = await self._resolve_bypass_user()
-                if bypass_user:
-                    user_id = bypass_user.get("id", "")
-                    if isinstance(user_id, str) and user_id.startswith("user:"):
-                        raw_id = user_id[5:]
-                        db_name = f"user_{raw_id}"
-                        try:
-                            await provision_user_db(raw_id)
-                        except Exception as exc:
-                            logger.warning("mcp.bypass_provision_failed: %s", exc)
-                        _user_db.set(db_name)
-                        logger.info("mcp.bypass_auth user=%s db=%s", settings.bypass_user, db_name)
-                        await self.app(scope, receive, send)
-                        return
-
-            # No bypass — return 401 with WWW-Authenticate header
-            # This tells MCP clients (like Claude.ai) to start the OAuth flow
-            logger.info("mcp.no_token — returning 401 with WWW-Authenticate")
-            resource_url = str(request.base_url).rstrip("/")
-            proto = request.headers.get("x-forwarded-proto", "")
-            if proto == "https" and resource_url.startswith("http://"):
-                resource_url = "https://" + resource_url[7:]
-
-            response = JSONResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32600,
-                        "message": "Authorization required",
-                    },
-                },
-                status_code=401,
-                headers={
-                    "WWW-Authenticate": f'Bearer resource_metadata="{resource_url}/.well-known/oauth-protected-resource"',
-                },
-            )
-            await response(scope, receive, send)
-            return
-
-        # Token valid — provision database and set routing
-        user_id = user.get("id", "")
-        if user_id and user_id.startswith("user:"):
-            raw_id = user_id[5:]  # Strip "user:" prefix
-            db_name = f"user_{raw_id}"
-
-            # Provision database if it doesn't exist (idempotent)
-            try:
-                await provision_user_db(raw_id)
-                logger.debug("mcp.db_provisioned user_id=%s db=%s", raw_id, db_name)
-            except Exception as exc:
-                logger.warning(
-                    "mcp.db_provision_failed user_id=%s reason=%s (continuing anyway)",
-                    raw_id,
-                    exc,
-                )
-
-            # Set the context var so all get_db() calls route to user's database
-            _user_db.set(db_name)
-            logger.debug("mcp.db_routing user_id=%s db=%s", raw_id, db_name)
-        else:
-            logger.warning("mcp.missing_user_id user=%s", user)
-
-        # Pass through to the MCP app
-        await self.app(scope, receive, send)
-
-
-# Mount the MCP sub-app at /mcp/ inside the FastAPI app.
-# The MCP endpoint will be accessible at /mcp/mcp/ (mount path + internal path).
-api.mount("/mcp", MCPAuthMiddleware(mcp_app))
-
-logger.info("Qmemory Cloud app created — MCP mounted at /mcp/ (auth required)")
+logger.info("Qmemory Cloud app created — MCP mounted at /mcp/ (no auth)")
