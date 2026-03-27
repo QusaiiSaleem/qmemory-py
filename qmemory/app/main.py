@@ -447,6 +447,22 @@ async def root_redirect(request: Request):
     return RedirectResponse(url="/login", status_code=302)
 
 
+def _get_base_url(request: Request) -> str:
+    """
+    Get the public-facing base URL, respecting reverse proxy headers.
+
+    Railway (and other proxies) terminate TLS and forward requests as HTTP.
+    The app sees http:// but the public URL is https://. We check
+    X-Forwarded-Proto to detect this.
+    """
+    base_url = str(request.base_url).rstrip("/")
+    # Railway sets X-Forwarded-Proto: https when TLS is terminated at the proxy
+    proto = request.headers.get("x-forwarded-proto", "")
+    if proto == "https" and base_url.startswith("http://"):
+        base_url = "https://" + base_url[7:]
+    return base_url
+
+
 @api.get("/.well-known/oauth-authorization-server")
 async def oauth_metadata(request: Request):
     """
@@ -456,8 +472,7 @@ async def oauth_metadata(request: Request):
     It tells the MCP client where to send users for authorization,
     where to register as a client, and where to exchange codes for tokens.
     """
-    # Build the base URL from the incoming request (works in dev + production)
-    base_url = str(request.base_url).rstrip("/")
+    base_url = _get_base_url(request)
 
     logger.info("oauth.metadata_requested base_url=%s", base_url)
 
@@ -481,7 +496,7 @@ async def oauth_protected_resource(request: Request):
 
     Tells MCP clients where the authorization server is for this resource.
     """
-    base_url = str(request.base_url).rstrip("/")
+    base_url = _get_base_url(request)
 
     logger.info("oauth.protected_resource_requested base_url=%s", base_url)
 
