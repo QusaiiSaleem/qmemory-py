@@ -585,6 +585,12 @@ class MCPAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # DEBUG: log what Mount gives us
+        logger.info(
+            "SCOPE path=%s root_path=%s qs=%s",
+            scope.get("path"), scope.get("root_path"), scope.get("query_string"),
+        )
+
         request = StarletteRequest(scope)
 
         # NOTE: CORS preflight (OPTIONS) is handled by CORSMiddleware on the
