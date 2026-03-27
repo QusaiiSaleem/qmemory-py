@@ -81,6 +81,7 @@ Cloud schema adds user accounts, API tokens, and owner-based row isolation:
 - **OAuth register must return HTTP 201** — RFC 7591 requires 201 Created + `client_id_issued_at` field.
 - **Claude.ai OAuth is a known bug** — Claude.ai receives 401 but never starts OAuth discovery. Affects all custom MCP servers. Tracked at anthropics/claude-ai-mcp#5. Don't spend time debugging our OAuth if Claude.ai never sends requests to `/.well-known/*`.
 - **ASGI scope in mounted middleware** — `api.mount("/mcp", Middleware(app))` strips path prefix in scope. Middleware sees `path="/"`, not `path="/mcp/"`. But `scope.get("root_path")` = `/mcp`.
+- **Schema loader must load ALL .surql files** — `apply_schema()` in `db/client.py` loads 3 files in order: `schema.surql` → `schema_cloud.surql` → `schema_oauth.surql`. Missing a file causes silent failures (tables don't exist, queries return empty).
 
 ## Architecture
 
