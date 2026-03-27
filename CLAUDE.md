@@ -64,8 +64,8 @@ Cloud schema adds user accounts, API tokens, and owner-based row isolation:
 
 - **URL**: `https://mem0.qusai.org/mcp/` (direct: `qmemory-api-production.up.railway.app/mcp/`)
 - **Auth (Bearer)**: `Authorization: Bearer qm_ak_xxxxx` header — for Claude Code and API clients
-- **Auth (Bypass)**: `?key=QMEMORY_BYPASS_KEY` query param — for Claude.ai (temporary single-user mode)
-- **Bypass mode**: When `QMEMORY_BYPASS_KEY` env var is set, `?key=SECRET` skips OAuth and routes to `QMEMORY_BYPASS_USER` (default: `hi@qusai.org`). Remove the env var to re-enable multi-user OAuth.
+- **Auth (Bypass)**: When `QMEMORY_BYPASS_KEY` env var exists, all unauthenticated requests skip OAuth and route to `QMEMORY_BYPASS_USER` (default: `hi@qusai.org`). No key in URL needed — just the env var's presence enables it.
+- **To re-enable multi-user OAuth**: `railway variables delete QMEMORY_BYPASS_KEY --service qmemory-api` — bypass code becomes no-op, 401 + OAuth flow takes over. All OAuth routes, DB provisioning, and per-user isolation are already implemented and ready.
 - **Token format**: `qm_ak_` + 32 hex chars (38 chars total). Only SHA-256 hash stored in DB.
 - **Token flow**: signup at `/signup` → generate token at `/tokens` → use in Claude Code MCP client
 - Auth middleware in `MCPAuthMiddleware` class in `app/main.py` wraps the FastMCP sub-app
