@@ -551,12 +551,21 @@ class MCPAuthMiddleware:
 
         request = StarletteRequest(scope)
 
+        # Log all MCP requests for debugging
+        logger.info(
+            "mcp.request method=%s path=%s has_auth=%s",
+            request.method,
+            request.url.path,
+            "authorization" in request.headers,
+        )
+
         try:
             user = await resolve_api_token(request)
         except Exception as exc:
             # resolve_api_token raises HTTPException on invalid token
             status = getattr(exc, "status_code", 401)
             detail = getattr(exc, "detail", "Authentication failed")
+            logger.warning("mcp.auth_failed reason=%s", detail)
             response = JSONResponse(
                 {
                     "jsonrpc": "2.0",
@@ -564,22 +573,33 @@ class MCPAuthMiddleware:
                     "error": {"code": -32600, "message": detail},
                 },
                 status_code=status,
+                headers={"WWW-Authenticate": "Bearer"},
             )
             await response(scope, receive, send)
             return
 
         if user is None:
-            # No token provided — require it for MCP access
+            # No token provided — return 401 with WWW-Authenticate header
+            # This tells MCP clients (like Claude.ai) to start the OAuth flow
+            logger.info("mcp.no_token — returning 401 with WWW-Authenticate")
+            resource_url = str(request.base_url).rstrip("/")
+            proto = request.headers.get("x-forwarded-proto", "")
+            if proto == "https" and resource_url.startswith("http://"):
+                resource_url = "https://" + resource_url[7:]
+
             response = JSONResponse(
                 {
                     "jsonrpc": "2.0",
                     "id": None,
                     "error": {
                         "code": -32600,
-                        "message": "Authorization required. Use: Authorization: Bearer qm_ak_xxx",
+                        "message": "Authorization required",
                     },
                 },
                 status_code=401,
+                headers={
+                    "WWW-Authenticate": f'Bearer resource_metadata="{resource_url}/.well-known/oauth-protected-resource"',
+                },
             )
             await response(scope, receive, send)
             return
