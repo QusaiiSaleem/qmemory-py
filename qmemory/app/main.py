@@ -417,6 +417,24 @@ api.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# CORS Middleware — allow Claude.ai and other MCP clients
+# ---------------------------------------------------------------------------
+# Claude.ai makes cross-origin requests for OAuth and MCP, so we need
+# to respond to CORS preflight (OPTIONS) with proper headers.
+from starlette.middleware.cors import CORSMiddleware
+
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, you may want to restrict this
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+    allow_headers=["*"],
+    expose_headers=["Mcp-Session-Id", "WWW-Authenticate"],
+    max_age=86400,  # Cache preflight for 24 hours
+)
+logger.info("CORS middleware enabled — allowing all origins for OAuth/MCP")
+
+# ---------------------------------------------------------------------------
 # Include auth routes (login, signup, logout)
 # ---------------------------------------------------------------------------
 api.include_router(auth_router)
