@@ -26,6 +26,50 @@ qmemory schema                  # apply DB schema (safe to re-run)
   - `ANTHROPIC_API_KEY` (for LLM dedup)
   - `VOYAGE_API_KEY` (for embeddings)
 
+## Railway Deployment
+
+SurrealDB runs as a separate Railway service built from `surrealdb/Dockerfile`:
+- **Image**: Custom Debian + SurrealDB v3.0.0 (pinned)
+- **Engine**: RocksDB at `/data/qmemory.db` (persistent volume at `/data`)
+- **URL**: `surrealdb-production-d9ea.up.railway.app`
+- **Internal**: `surrealdb.railway.internal:8000` (free, for app→DB)
+- **Auth**: root + `SURREAL_PASS` env var (never hardcoded)
+
+```bash
+# Deploy updated Dockerfile to Railway
+cd surrealdb && railway up --service surrealdb --detach
+
+# Import schema to Railway
+surreal import -e "https://surrealdb-production-d9ea.up.railway.app" \
+  -u root -p "$SURREAL_PASS" --namespace qmemory --database main schema.surql
+
+# Backup (run before schema changes!)
+./surrealdb/backup.sh
+```
+
+**Railway env vars for SurrealDB service**: `PORT=8000`, `SURREAL_PASS`, `SURREAL_LOG=info`
+**Railway env vars for app service**: `QMEMORY_SURREAL_URL=ws://surrealdb.railway.internal:8000`
+
+### Multi-User Auth (Cloud Schema)
+
+Cloud schema adds user accounts, API tokens, and owner-based row isolation:
+- `schema_cloud.surql` — user table, `qmemory_user` access (Argon2), api_token table, owner fields
+- `schema_cloud_permissions.surql` — row-level permissions (owner = $auth isolation)
+- **Import order**: `schema.surql` → `schema_cloud.surql` → `schema_cloud_permissions.surql`
+- Root (MCP local mode) bypasses all permissions — sees everything
+- Record-level users only see memories/entities where `owner = $auth`
+- Tables with `PERMISSIONS NONE` silently return empty for non-root users — always use `OVERWRITE` when adding permissions
+
+### MCP Endpoint (Remote)
+
+- **URL**: `https://mem0.qusai.org/mcp/` (also `qmemory-api-production.up.railway.app/mcp/`)
+- **Auth**: `Authorization: Bearer qm_ak_xxxxx` header required on every request
+- **Token format**: `qm_ak_` + 32 hex chars (38 chars total). Only SHA-256 hash stored in DB.
+- **Token flow**: signup at `/signup` → generate token at `/tokens` → use in MCP client
+- Auth middleware in `MCPAuthMiddleware` class in `app/main.py` wraps the FastMCP sub-app
+- `/health` endpoint does NOT require auth (for Railway health checks)
+- `mcp.http_app(path="/")` + `api.mount("/mcp", ...)` = clean `/mcp/` URL (not `/mcp/mcp/`)
+
 ## Architecture
 
 ```
@@ -34,6 +78,8 @@ qmemory/
   constants.py       # 8 memory categories, extraction presets, salience decay
   types.py           # Pydantic models for all graph nodes + edges
   db/client.py       # SurrealDB: get_db(), query(), normalize_ids(), generate_id()
+  db/schema_cloud.surql          # Multi-user: user table, access rules, owner fields
+  db/schema_cloud_permissions.surql  # Row-level permissions (owner isolation)
   core/              # Business logic
     recall.py        #   4-tier recall pipeline + assemble_context()
     save.py          #   Save memory with auto-dedup
@@ -59,6 +105,10 @@ qmemory/
   worker/            # Background worker (Phase 2 — stub only)
 tests/               # Mirrors qmemory/ structure, pytest-asyncio (asyncio_mode = "auto")
 schema.surql         # SurrealDB schema (also at qmemory/db/schema.surql)
+surrealdb/           # Railway SurrealDB service (separate container)
+  Dockerfile         #   Custom Debian + RocksDB (not official image — fixes Railway volume permissions)
+  railway.json       #   Railway service config (ON_FAILURE restart)
+  backup.sh          #   Backup script (export → gzip)
 ```
 
 ## Key Patterns
@@ -69,6 +119,7 @@ schema.surql         # SurrealDB schema (also at qmemory/db/schema.surql)
 - **ID format** — `generate_id("mem")` → `"mem1710864000000abc"` (timestamp + 3 random chars, no dashes).
 - **Soft-delete only** — memories are never hard-deleted. `is_active = false` for deleted items.
 - **Config via env** — all settings in `qmemory/config.py` via Pydantic Settings. `get_settings()` is cached (call `.cache_clear()` in tests).
+- **Railway SurrealDB uses custom Dockerfile** — NOT the official `surrealdb/surrealdb:v3` image. The official image runs as non-root, causing permission errors with Railway volumes. The custom Debian image in `surrealdb/Dockerfile` fixes this.
 
 ## Testing
 
@@ -77,6 +128,9 @@ schema.surql         # SurrealDB schema (also at qmemory/db/schema.surql)
 - 9 known failing tests — all the same issue: SurrealDB edge queries with `WHERE in = type::record(...)` return empty in test sequences. Core logic works; it's a test query pattern issue.
 
 ## MCP Tools (7 total)
+
+Two transports: **stdio** (Claude Code, local, `qmemory serve`) and **HTTP** (Claude.ai, remote, `https://mem0.qusai.org/mcp/`).
+HTTP requires `Authorization: Bearer qm_ak_xxx`. Stdio has no auth (runs locally).
 
 | Tool | Read-only | Purpose |
 |------|-----------|---------|

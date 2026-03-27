@@ -514,6 +514,9 @@
             toolname="qmemory_login"
             tooldescription="Authenticate user with email and password to access qmemory system"
         >
+            {% if return_to %}
+            <input type="hidden" name="return_to" value="{{ return_to }}">
+            {% endif %}
             <div class="form-group">
                 <label for="email">Email</label>
                 <input

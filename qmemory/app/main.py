@@ -447,6 +447,31 @@ async def root_redirect(request: Request):
     return RedirectResponse(url="/login", status_code=302)
 
 
+@api.get("/.well-known/oauth-authorization-server")
+async def oauth_metadata(request: Request):
+    """
+    OAuth 2.0 Authorization Server Metadata (RFC 8414).
+
+    Claude.ai uses this to discover our OAuth endpoints automatically.
+    It tells the MCP client where to send users for authorization and
+    where to exchange codes for tokens.
+    """
+    # Build the base URL from the incoming request (works in dev + production)
+    base_url = str(request.base_url).rstrip("/")
+
+    logger.info("oauth.metadata_requested base_url=%s", base_url)
+
+    return {
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/authorize",
+        "token_endpoint": f"{base_url}/token",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256", "plain"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+    }
+
+
 @api.get("/health")
 async def health_check():
     """Check if the server and SurrealDB are reachable."""

@@ -201,20 +201,28 @@ async def authorize(
     # Check if user is logged in
     user = get_session_user(request)
     if not user:
-        # Redirect to login with return URL
-        login_url = (
-            f"/login?return_to=/oauth/authorize"
-            f"&response_type={response_type}"
-            f"&client_id={client_id}"
-            f"&redirect_uri={redirect_uri}"
-            f"&scope={scope}"
-        )
+        # Build the full authorize URL so login can redirect back here
+        # We URL-encode the return_to value to preserve the nested query params
+        from urllib.parse import urlencode, quote
+
+        authorize_params = {
+            "response_type": response_type,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+        }
         if state:
-            login_url += f"&state={state}"
+            authorize_params["state"] = state
         if code_challenge:
-            login_url += f"&code_challenge={code_challenge}"
+            authorize_params["code_challenge"] = code_challenge
         if code_challenge_method:
-            login_url += f"&code_challenge_method={code_challenge_method}"
+            authorize_params["code_challenge_method"] = code_challenge_method
+
+        # Build: /authorize?response_type=code&client_id=...
+        return_to = f"/authorize?{urlencode(authorize_params)}"
+
+        # Redirect to login with return_to as a single encoded param
+        login_url = f"/login?return_to={quote(return_to, safe='')}"
 
         return RedirectResponse(login_url, status_code=302)
 

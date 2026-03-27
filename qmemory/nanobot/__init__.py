@@ -10,7 +10,7 @@ automatically at startup without any manual registration step.
 
 Each tool class:
   - Inherits from nanobot.agent.tools.base.Tool (guarded import — safe without SDK)
-  - Declares name, description, parameters as @property (JSON Schema)
+  - Declares name, description, parameters as plain class attributes (JSON Schema)
   - Implements async execute(**kwargs) that calls the matching core function
 
 Available tools:

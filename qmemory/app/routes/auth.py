@@ -199,18 +199,24 @@ async def _fetch_user_data(user_id: str) -> dict:
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    """Render the login page."""
-    logger.info("auth.login_page_viewed")
+async def login_page(request: Request, return_to: str | None = None):
+    """
+    Render the login page.
 
-    # If already logged in, redirect to dashboard
+    If return_to is provided (e.g. from OAuth flow), it gets passed to the
+    template as a hidden form field so we can redirect there after login.
+    """
+    logger.info("auth.login_page_viewed return_to=%s", return_to)
+
+    # If already logged in, redirect to return_to or dashboard
     if get_session_user(request):
-        return RedirectResponse(url="/dashboard", status_code=302)
+        redirect_url = return_to or "/dashboard"
+        return RedirectResponse(url=redirect_url, status_code=302)
 
     return templates.TemplateResponse(
         request,
         "pages/login.html",
-        context={"user": None, "error": None},
+        context={"user": None, "error": None, "return_to": return_to},
     )
 
 
@@ -233,8 +239,9 @@ async def login_submit(request: Request):
     form = await request.form()
     email = form.get("email", "").strip()
     password = form.get("password", "")
+    return_to = form.get("return_to", "").strip() or None
 
-    logger.info("auth.login_attempt email=%s", email)
+    logger.info("auth.login_attempt email=%s return_to=%s", email, return_to)
 
     # Basic validation
     if not email or not password:
@@ -242,7 +249,7 @@ async def login_submit(request: Request):
         return templates.TemplateResponse(
             request,
             "pages/login.html",
-            context={"user": None, "error": "يرجى إدخال البريد الإلكتروني وكلمة المرور"},
+            context={"user": None, "error": "يرجى إدخال البريد الإلكتروني وكلمة المرور", "return_to": return_to},
         )
 
     settings = get_app_settings()
@@ -285,8 +292,10 @@ async def login_submit(request: Request):
         request.session["email"] = user_info["email"]
         request.session["name"] = user_info["name"]
 
-        # Redirect to dashboard
-        return RedirectResponse(url="/dashboard", status_code=302)
+        # Redirect to return_to (OAuth flow) or dashboard
+        redirect_url = return_to or "/dashboard"
+        logger.info("auth.login_redirect email=%s redirect=%s", email, redirect_url)
+        return RedirectResponse(url=redirect_url, status_code=302)
 
     except Exception as exc:
         error_msg = str(exc)
@@ -295,7 +304,7 @@ async def login_submit(request: Request):
         return templates.TemplateResponse(
             request,
             "pages/login.html",
-            context={"user": None, "error": "البريد الإلكتروني أو كلمة المرور غير صحيحة"},
+            context={"user": None, "error": "البريد الإلكتروني أو كلمة المرور غير صحيحة", "return_to": return_to},
         )
     finally:
         try:
