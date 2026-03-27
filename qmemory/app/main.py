@@ -621,11 +621,22 @@ class MCPAuthMiddleware:
                         "mcp.bypass_auth user=%s db=%s",
                         settings.bypass_user, db_name,
                     )
-                    # DEBUG: log scope to find why FastMCP returns 404
-                    logger.info(
-                        "mcp.bypass_scope path=%s qs=%s method=%s",
-                        scope.get("path"), scope.get("query_string"), scope.get("method"),
-                    )
+                    # Strip ?key= from query string and fix the path.
+                    # Starlette mount() normally strips the /mcp prefix
+                    # before calling sub-apps, but our middleware sits
+                    # between the mount and the MCP app. We need to
+                    # strip it manually so FastMCP sees path="/".
+                    scope = dict(scope)
+                    path = scope.get("path", "")
+                    if path.startswith("/mcp"):
+                        scope["path"] = path[4:] or "/"
+                    # Also strip the bypass key from query string
+                    qs = scope.get("query_string", b"")
+                    if b"key=" in qs:
+                        from urllib.parse import parse_qs, urlencode
+                        params = parse_qs(qs.decode())
+                        params.pop("key", None)
+                        scope["query_string"] = urlencode(params, doseq=True).encode()
                     await self.app(scope, receive, send)
                     return
             # Bypass user not found in DB — fall through to normal auth
