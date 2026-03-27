@@ -621,7 +621,13 @@ class MCPAuthMiddleware:
                         "mcp.bypass_auth user=%s db=%s",
                         settings.bypass_user, db_name,
                     )
-                    await self.app(scope, receive, send)
+                    # Strip ?key= from the query string so FastMCP's
+                    # router doesn't get confused by the extra param
+                    from urllib.parse import parse_qs, urlencode
+                    qs = parse_qs(scope.get("query_string", b"").decode())
+                    qs.pop("key", None)
+                    clean_scope = dict(scope, query_string=urlencode(qs, doseq=True).encode())
+                    await self.app(clean_scope, receive, send)
                     return
             # Bypass user not found in DB — fall through to normal auth
             logger.warning(
