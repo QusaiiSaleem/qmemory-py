@@ -389,7 +389,7 @@ settings = get_app_settings()
 # json_response=True lets clients use Accept: application/json (simpler).
 # stateless_http=True means each request is independent (no session tracking).
 # This is the simplest mode for Claude.ai and other HTTP MCP clients.
-mcp_app = mcp.http_app(path="/mcp/", json_response=True, stateless_http=True)
+mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
 
 api = FastAPI(
     title="Qmemory Cloud",
