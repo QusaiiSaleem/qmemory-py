@@ -492,9 +492,16 @@ async def oauth_metadata(request: Request):
     """
     # When bypass mode is on, hide OAuth metadata so Claude.ai
     # doesn't try the OAuth flow — it just POSTs to /mcp/ directly.
+    # Cache-Control: no-store prevents Fastly CDN from serving stale 200s.
     settings = get_app_settings()
     if settings.bypass_key:
-        return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse(
+            {"error": "not_found"}, status_code=404,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Surrogate-Control": "no-store",  # Fastly CDN directive
+            },
+        )
 
     base_url = _get_base_url(request)
 
@@ -523,7 +530,13 @@ async def oauth_protected_resource(request: Request):
     # When bypass mode is on, hide OAuth metadata
     settings = get_app_settings()
     if settings.bypass_key:
-        return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse(
+            {"error": "not_found"}, status_code=404,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Surrogate-Control": "no-store",  # Fastly CDN directive
+            },
+        )
 
     base_url = _get_base_url(request)
 
