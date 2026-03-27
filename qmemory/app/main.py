@@ -453,8 +453,8 @@ async def oauth_metadata(request: Request):
     OAuth 2.0 Authorization Server Metadata (RFC 8414).
 
     Claude.ai uses this to discover our OAuth endpoints automatically.
-    It tells the MCP client where to send users for authorization and
-    where to exchange codes for tokens.
+    It tells the MCP client where to send users for authorization,
+    where to register as a client, and where to exchange codes for tokens.
     """
     # Build the base URL from the incoming request (works in dev + production)
     base_url = str(request.base_url).rstrip("/")
@@ -465,10 +465,30 @@ async def oauth_metadata(request: Request):
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/authorize",
         "token_endpoint": f"{base_url}/token",
+        "registration_endpoint": f"{base_url}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
-        "code_challenge_methods_supported": ["S256", "plain"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "scopes_supported": ["read", "write"],
+    }
+
+
+@api.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource(request: Request):
+    """
+    OAuth 2.0 Protected Resource Metadata (RFC 9728).
+
+    Tells MCP clients where the authorization server is for this resource.
+    """
+    base_url = str(request.base_url).rstrip("/")
+
+    logger.info("oauth.protected_resource_requested base_url=%s", base_url)
+
+    return {
+        "resource": base_url,
+        "authorization_servers": [base_url],
+        "scopes_supported": ["read", "write"],
     }
 
 

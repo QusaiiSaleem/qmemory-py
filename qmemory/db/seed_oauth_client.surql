@@ -17,7 +17,8 @@ INSERT IGNORE INTO oauth_client {
     secret_hash: "92742342f2d40e5f4c5b688d289408b0541804131ca16d76227b606fc2dd8786",
     redirect_uris: [
         "https://claude.ai/oauth/callback",
-        "https://claude.ai/api/mcp/callback"
+        "https://claude.ai/api/mcp/callback",
+        "https://claude.ai/api/mcp/auth_callback"
     ],
     allowed_scopes: ["read", "write"],
     created_at: time::now()

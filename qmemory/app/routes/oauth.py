@@ -70,7 +70,7 @@ def _verify_pkce(code_verifier: str, code_challenge: str, method: str) -> bool:
 
 
 async def _get_client_by_id(client_id: str) -> dict | None:
-    """Fetch OAuth client by ID."""
+    """Fetch OAuth client by ID (works for both static and dynamically-registered clients)."""
     async with get_db() as db:
         result = await query(
             db,
@@ -78,7 +78,9 @@ async def _get_client_by_id(client_id: str) -> dict | None:
             {"client_id": client_id},
         )
         if result and isinstance(result, list) and len(result) > 0:
+            logger.info("oauth.client_found client_id=%s name=%s", client_id, result[0].get("name"))
             return result[0]
+    logger.warning("oauth.client_not_found client_id=%s", client_id)
     return None
 
 
@@ -321,7 +323,7 @@ async def token(
     code: str | None = Form(None),
     redirect_uri: str | None = Form(None),
     client_id: str = Form(...),
-    client_secret: str = Form(...),
+    client_secret: str | None = Form(None),  # Optional — PKCE can replace it
     code_verifier: str | None = Form(None),
 ):
     """
@@ -330,27 +332,46 @@ async def token(
     Exchanges an authorization code for an access token.
     The access token is a standard qm_ak_xxx token that works
     with the existing auth middleware.
+
+    Supports two auth modes:
+    - client_secret: traditional confidential client auth
+    - PKCE (code_verifier): public client auth (used by Claude.ai)
     """
+    logger.info(
+        "oauth.token_request grant_type=%s client_id=%s has_code=%s has_secret=%s has_verifier=%s redirect_uri=%s",
+        grant_type, client_id, bool(code), bool(client_secret), bool(code_verifier), redirect_uri,
+    )
+
     # Validate grant_type
     if grant_type != "authorization_code":
+        logger.warning("oauth.token_failed reason=unsupported_grant_type got=%s", grant_type)
         return {"error": "unsupported_grant_type", "error_description": "Only 'authorization_code' is supported"}
 
-    # Validate client credentials
+    # Validate client exists
     client = await _get_client_by_id(client_id)
     if not client:
+        logger.warning("oauth.token_failed reason=unknown_client client_id=%s", client_id)
         return {"error": "invalid_client", "error_description": "Unknown client"}
 
-    # Verify client secret
-    secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
-    if secret_hash != client.get("secret_hash"):
-        return {"error": "invalid_client", "error_description": "Invalid client secret"}
+    # Verify client secret IF provided (optional when PKCE is used)
+    if client_secret:
+        secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
+        if secret_hash != client.get("secret_hash"):
+            logger.warning("oauth.token_failed reason=invalid_secret client_id=%s", client_id)
+            return {"error": "invalid_client", "error_description": "Invalid client secret"}
+    elif not code_verifier:
+        # Must have at least one: client_secret or PKCE code_verifier
+        logger.warning("oauth.token_failed reason=no_auth_method client_id=%s", client_id)
+        return {"error": "invalid_request", "error_description": "Either client_secret or code_verifier required"}
 
     # Validate authorization code
     if not code:
+        logger.warning("oauth.token_failed reason=missing_code")
         return {"error": "invalid_request", "error_description": "Missing authorization code"}
 
     auth_code = await _get_and_consume_auth_code(code)
     if not auth_code:
+        logger.warning("oauth.token_failed reason=invalid_or_expired_code")
         return {"error": "invalid_grant", "error_description": "Invalid or expired authorization code"}
 
     # Validate client_id matches
@@ -358,21 +379,28 @@ async def token(
     if isinstance(auth_client_id, dict):
         auth_client_id = auth_client_id.get("id", "")
     if auth_client_id != client_id and not auth_client_id.endswith(f":{client_id}"):
+        logger.warning("oauth.token_failed reason=client_mismatch expected=%s got=%s", auth_client_id, client_id)
         return {"error": "invalid_grant", "error_description": "Authorization code was issued to a different client"}
 
     # Validate redirect_uri matches
-    if redirect_uri != auth_code.get("redirect_uri"):
+    if redirect_uri and redirect_uri != auth_code.get("redirect_uri"):
+        logger.warning(
+            "oauth.token_failed reason=redirect_mismatch expected=%s got=%s",
+            auth_code.get("redirect_uri"), redirect_uri,
+        )
         return {"error": "invalid_grant", "error_description": "Redirect URI mismatch"}
 
-    # Validate PKCE if used
+    # Validate PKCE if the auth code had a challenge
     if auth_code.get("code_challenge"):
         if not code_verifier:
+            logger.warning("oauth.token_failed reason=missing_pkce_verifier")
             return {"error": "invalid_grant", "error_description": "PKCE code_verifier required"}
         if not _verify_pkce(
             code_verifier,
             auth_code["code_challenge"],
             auth_code.get("code_challenge_method", "S256"),
         ):
+            logger.warning("oauth.token_failed reason=pkce_verification_failed")
             return {"error": "invalid_grant", "error_description": "PKCE verification failed"}
 
     # Get user ID from auth code
@@ -421,4 +449,73 @@ async def token(
         "token_type": "Bearer",
         "expires_in": int(timedelta(days=ACCESS_TOKEN_EXPIRES_DAYS).total_seconds()),
         "scope": auth_code.get("scope", "read write"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /register - Dynamic Client Registration (RFC 7591)
+# ---------------------------------------------------------------------------
+# Claude.ai registers itself as a client before starting the OAuth flow.
+# This is required by the MCP authorization spec (2025-03-26).
+# ---------------------------------------------------------------------------
+
+
+@router.post("/register")
+async def register_client(request: Request):
+    """
+    Dynamic Client Registration (RFC 7591).
+
+    Claude.ai sends this to register itself as an OAuth client.
+    We generate a unique client_id and store the client in the database.
+    No client_secret is needed — Claude.ai uses PKCE (public client).
+    """
+    body = await request.json()
+
+    client_name = body.get("client_name", "Unknown Client")
+    redirect_uris = body.get("redirect_uris", [])
+    grant_types = body.get("grant_types", ["authorization_code"])
+    token_endpoint_auth_method = body.get("token_endpoint_auth_method", "none")
+
+    logger.info(
+        "oauth.register_request client_name=%s redirect_uris=%s auth_method=%s",
+        client_name, redirect_uris, token_endpoint_auth_method,
+    )
+
+    # Validate redirect_uris
+    if not redirect_uris:
+        return {"error": "invalid_client_metadata", "error_description": "redirect_uris required"}
+
+    # Generate a unique client_id
+    client_id = secrets.token_urlsafe(16)
+
+    # Store in the database
+    async with get_db() as db:
+        await query(
+            db,
+            "CREATE type::record('oauth_client', $client_id) CONTENT {"
+            "  name: $name,"
+            "  redirect_uris: $redirect_uris,"
+            "  grant_types: $grant_types,"
+            "  token_endpoint_auth_method: $auth_method,"
+            "  allowed_scopes: ['read', 'write'],"
+            "  created_at: time::now()"
+            "}",
+            {
+                "client_id": client_id,
+                "name": client_name,
+                "redirect_uris": redirect_uris,
+                "grant_types": grant_types,
+                "auth_method": token_endpoint_auth_method,
+            },
+        )
+
+    logger.info("oauth.client_registered client_id=%s client_name=%s", client_id, client_name)
+
+    # Return the registration response (RFC 7591 Section 3.2.1)
+    return {
+        "client_id": client_id,
+        "client_name": client_name,
+        "redirect_uris": redirect_uris,
+        "grant_types": grant_types,
+        "token_endpoint_auth_method": token_endpoint_auth_method,
     }
