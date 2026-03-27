@@ -585,12 +585,6 @@ class MCPAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # DEBUG: log what Mount gives us
-        logger.info(
-            "SCOPE path=%s root_path=%s qs=%s",
-            scope.get("path"), scope.get("root_path"), scope.get("query_string"),
-        )
-
         request = StarletteRequest(scope)
 
         # NOTE: CORS preflight (OPTIONS) is handled by CORSMiddleware on the
@@ -627,16 +621,9 @@ class MCPAuthMiddleware:
                         "mcp.bypass_auth user=%s db=%s",
                         settings.bypass_user, db_name,
                     )
-                    # Strip ?key= from query string and fix the path.
-                    # Starlette mount() normally strips the /mcp prefix
-                    # before calling sub-apps, but our middleware sits
-                    # between the mount and the MCP app. We need to
-                    # strip it manually so FastMCP sees path="/".
+                    # Strip ?key= from query string before passing to
+                    # FastMCP (keep path unchanged — Mount doesn't strip it)
                     scope = dict(scope)
-                    path = scope.get("path", "")
-                    if path.startswith("/mcp"):
-                        scope["path"] = path[4:] or "/"
-                    # Also strip the bypass key from query string
                     qs = scope.get("query_string", b"")
                     if b"key=" in qs:
                         from urllib.parse import parse_qs, urlencode
