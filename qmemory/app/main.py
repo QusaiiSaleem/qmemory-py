@@ -37,7 +37,7 @@ from qmemory.app.routes.dashboard import router as dashboard_router
 from qmemory.app.routes.memories import router as memories_router
 from qmemory.app.routes.oauth import router as oauth_router
 from qmemory.app.routes.tokens import router as tokens_router
-from qmemory.db.client import _user_db, is_healthy
+from qmemory.db.client import _user_db, get_db, is_healthy, query
 from qmemory.db.provision import provision_user_db
 
 # ---------------------------------------------------------------------------
@@ -563,6 +563,23 @@ class MCPAuthMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
 
+    async def _resolve_bypass_user(self) -> dict | None:
+        """Look up the bypass user from the database by email.
+
+        Only called when QMEMORY_BYPASS_KEY is set and the request
+        includes a matching ?key= parameter.
+        """
+        settings = get_app_settings()
+        async with get_db() as db:
+            result = await query(
+                db,
+                "SELECT * FROM user WHERE email = $email LIMIT 1",
+                {"email": settings.bypass_user},
+            )
+            if result and isinstance(result, list) and len(result) > 0:
+                return result[0]
+        return None
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -573,6 +590,43 @@ class MCPAuthMiddleware:
         # NOTE: CORS preflight (OPTIONS) is handled by CORSMiddleware on the
         # FastAPI app — it intercepts OPTIONS before requests reach this middleware.
         # No duplicate CORS handling needed here.
+
+        # --- OAuth bypass (temporary single-user mode) ---
+        # When QMEMORY_BYPASS_KEY is set, requests with ?key=SECRET skip OAuth
+        # and route directly to the bypass user's database. This is a temporary
+        # workaround for Claude.ai's broken OAuth flow.
+        #
+        # TO RE-ENABLE MULTI-USER OAUTH:
+        #   1. Remove QMEMORY_BYPASS_KEY env var from Railway
+        #   2. This entire block becomes a no-op (bypass_key is None)
+        #   3. The normal token auth + OAuth flow below takes over
+        settings = get_app_settings()
+        bypass_key = settings.bypass_key
+        request_key = request.query_params.get("key")
+
+        if bypass_key and request_key == bypass_key:
+            # Bypass key matches — skip OAuth, route to the configured user
+            bypass_user = await self._resolve_bypass_user()
+            if bypass_user:
+                user_id = bypass_user.get("id", "")
+                if isinstance(user_id, str) and user_id.startswith("user:"):
+                    raw_id = user_id[5:]
+                    db_name = f"user_{raw_id}"
+                    try:
+                        await provision_user_db(raw_id)
+                    except Exception as exc:
+                        logger.warning("mcp.bypass_provision_failed: %s", exc)
+                    _user_db.set(db_name)
+                    logger.info(
+                        "mcp.bypass_auth user=%s db=%s",
+                        settings.bypass_user, db_name,
+                    )
+                    await self.app(scope, receive, send)
+                    return
+            # Bypass user not found in DB — fall through to normal auth
+            logger.warning(
+                "mcp.bypass_user_not_found email=%s", settings.bypass_user,
+            )
 
         # Log all MCP requests for debugging
         logger.info(

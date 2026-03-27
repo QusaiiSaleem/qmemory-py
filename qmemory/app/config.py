@@ -44,6 +44,16 @@ class AppSettings(BaseSettings):
     # Enable debug mode (verbose logging, auto-reload, etc.)
     debug: bool = False
 
+    # --- OAuth bypass (temporary single-user mode) ---
+    # When set, requests to /mcp/?key=THIS_VALUE skip OAuth entirely
+    # and route to the bypass user's database. Remove this env var
+    # to re-enable full multi-user OAuth.
+    bypass_key: str | None = None
+
+    # The email of the user to route to when bypass_key is used.
+    # Must be an existing user in the SurrealDB 'user' table.
+    bypass_user: str = "hi@qusai.org"
+
     model_config = {"env_prefix": "QMEMORY_", "env_file": ".env"}
 
 
