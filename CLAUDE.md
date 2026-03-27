@@ -62,18 +62,38 @@ Cloud schema adds user accounts, API tokens, and owner-based row isolation:
 
 ### MCP Endpoint (Remote)
 
-- **URL**: `https://mem0.qusai.org/mcp/` (also `qmemory-api-production.up.railway.app/mcp/`)
-- **Auth**: `Authorization: Bearer qm_ak_xxxxx` header required on every request
+- **URL**: `https://mem0.qusai.org/mcp/` (direct: `qmemory-api-production.up.railway.app/mcp/`)
+- **Auth (Bearer)**: `Authorization: Bearer qm_ak_xxxxx` header — for Claude Code and API clients
+- **Auth (Bypass)**: `?key=QMEMORY_BYPASS_KEY` query param — for Claude.ai (temporary single-user mode)
+- **Bypass mode**: When `QMEMORY_BYPASS_KEY` env var is set, `?key=SECRET` skips OAuth and routes to `QMEMORY_BYPASS_USER` (default: `hi@qusai.org`). Remove the env var to re-enable multi-user OAuth.
 - **Token format**: `qm_ak_` + 32 hex chars (38 chars total). Only SHA-256 hash stored in DB.
-- **Token flow**: signup at `/signup` → generate token at `/tokens` → use in MCP client
+- **Token flow**: signup at `/signup` → generate token at `/tokens` → use in Claude Code MCP client
 - Auth middleware in `MCPAuthMiddleware` class in `app/main.py` wraps the FastMCP sub-app
 - `/health` endpoint does NOT require auth (for Railway health checks)
 - `mcp.http_app(path="/")` + `api.mount("/mcp", ...)` = clean `/mcp/` URL (not `/mcp/mcp/`)
+- **OAuth 2.0 routes**: `/authorize`, `/token`, `/register`, `/.well-known/oauth-*` — all implemented but Claude.ai has a known bug where it never starts the OAuth flow ([anthropics/claude-ai-mcp#5](https://github.com/anthropics/claude-ai-mcp/issues/5))
+
+## Gotchas
+
+- **`http_app(path="/")` NOT `path="/mcp/"`** — `api.mount("/mcp", ...)` strips the prefix before passing to FastMCP. Using `path="/mcp/"` causes 404.
+- **Railway CDN (Fastly) caches 401 responses** — when testing OAuth/auth changes, use the direct Railway URL (`qmemory-api-production.up.railway.app`) to bypass CDN cache.
+- **OAuth token errors must return HTTP 400/401** — RFC 6749 requires it. Returning 200 with error JSON body breaks Claude.ai's OAuth client.
+- **OAuth register must return HTTP 201** — RFC 7591 requires 201 Created + `client_id_issued_at` field.
+- **Claude.ai OAuth is a known bug** — Claude.ai receives 401 but never starts OAuth discovery. Affects all custom MCP servers. Tracked at anthropics/claude-ai-mcp#5. Don't spend time debugging our OAuth if Claude.ai never sends requests to `/.well-known/*`.
+- **ASGI scope in mounted middleware** — `api.mount("/mcp", Middleware(app))` strips path prefix in scope. Middleware sees `path="/"`, not `path="/mcp/"`. But `scope.get("root_path")` = `/mcp`.
 
 ## Architecture
 
 ```
 qmemory/
+  app/               # Cloud HTTP server (FastAPI + FastMCP)
+    main.py          #   FastAPI app, MCPAuthMiddleware, OAuth bypass, mounts
+    config.py        #   AppSettings — QMEMORY_ prefixed env vars (bypass_key, bypass_user)
+    auth.py          #   resolve_api_token(), create_api_token_for_user()
+    routes/oauth.py  #   OAuth 2.0 endpoints: /authorize, /token, /register, /consent
+    routes/auth.py   #   Session auth: /login, /signup, /logout
+    routes/tokens.py #   Token management UI: /tokens
+    routes/connect.py#   /connect page for Claude.ai setup
   config.py          # Pydantic Settings — env vars with QMEMORY_ prefix
   constants.py       # 8 memory categories, extraction presets, salience decay
   types.py           # Pydantic models for all graph nodes + edges
