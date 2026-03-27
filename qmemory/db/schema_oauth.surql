@@ -21,11 +21,11 @@ DEFINE TABLE IF NOT EXISTS oauth_client TYPE NORMAL SCHEMAFULL;
 
 DEFINE FIELD IF NOT EXISTS id ON oauth_client TYPE string;
 DEFINE FIELD IF NOT EXISTS name ON oauth_client TYPE string;
-DEFINE FIELD IF NOT EXISTS secret_hash ON oauth_client TYPE option<string>;  -- SHA-256 of client secret (optional for public/PKCE clients)
+DEFINE FIELD OVERWRITE secret_hash ON oauth_client TYPE option<string>;  -- SHA-256 of client secret (optional for public/PKCE clients)
 DEFINE FIELD IF NOT EXISTS redirect_uris ON oauth_client TYPE array;
 DEFINE FIELD IF NOT EXISTS allowed_scopes ON oauth_client TYPE array DEFAULT ["read", "write"];
-DEFINE FIELD IF NOT EXISTS grant_types ON oauth_client TYPE array DEFAULT ["authorization_code"];
-DEFINE FIELD IF NOT EXISTS token_endpoint_auth_method ON oauth_client TYPE string DEFAULT "none";  -- "none" for PKCE public clients
+DEFINE FIELD OVERWRITE grant_types ON oauth_client TYPE array DEFAULT ["authorization_code"];
+DEFINE FIELD OVERWRITE token_endpoint_auth_method ON oauth_client TYPE string DEFAULT "none";  -- "none" for PKCE public clients
 DEFINE FIELD IF NOT EXISTS created_at ON oauth_client TYPE datetime DEFAULT time::now();
 
 DEFINE INDEX IF NOT EXISTS idx_oauth_client_id ON oauth_client FIELDS id UNIQUE;
