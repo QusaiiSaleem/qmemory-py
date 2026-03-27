@@ -522,6 +522,7 @@ async def oauth_protected_resource(request: Request):
         "resource": base_url,
         "authorization_servers": [base_url],
         "scopes_supported": ["read", "write"],
+        "bearer_methods_supported": ["header"],  # Authorization: Bearer <token>
     }
 
 
