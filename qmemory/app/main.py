@@ -591,52 +591,6 @@ class MCPAuthMiddleware:
         # FastAPI app — it intercepts OPTIONS before requests reach this middleware.
         # No duplicate CORS handling needed here.
 
-        # --- OAuth bypass (temporary single-user mode) ---
-        # When QMEMORY_BYPASS_KEY is set, requests with ?key=SECRET skip OAuth
-        # and route directly to the bypass user's database. This is a temporary
-        # workaround for Claude.ai's broken OAuth flow.
-        #
-        # TO RE-ENABLE MULTI-USER OAUTH:
-        #   1. Remove QMEMORY_BYPASS_KEY env var from Railway
-        #   2. This entire block becomes a no-op (bypass_key is None)
-        #   3. The normal token auth + OAuth flow below takes over
-        settings = get_app_settings()
-        bypass_key = settings.bypass_key
-        request_key = request.query_params.get("key")
-
-        if bypass_key and request_key == bypass_key:
-            # Bypass key matches — skip OAuth, route to the configured user
-            bypass_user = await self._resolve_bypass_user()
-            if bypass_user:
-                user_id = bypass_user.get("id", "")
-                if isinstance(user_id, str) and user_id.startswith("user:"):
-                    raw_id = user_id[5:]
-                    db_name = f"user_{raw_id}"
-                    try:
-                        await provision_user_db(raw_id)
-                    except Exception as exc:
-                        logger.warning("mcp.bypass_provision_failed: %s", exc)
-                    _user_db.set(db_name)
-                    logger.info(
-                        "mcp.bypass_auth user=%s db=%s",
-                        settings.bypass_user, db_name,
-                    )
-                    # Strip ?key= from query string before passing to
-                    # FastMCP (keep path unchanged — Mount doesn't strip it)
-                    scope = dict(scope)
-                    qs = scope.get("query_string", b"")
-                    if b"key=" in qs:
-                        from urllib.parse import parse_qs, urlencode
-                        params = parse_qs(qs.decode())
-                        params.pop("key", None)
-                        scope["query_string"] = urlencode(params, doseq=True).encode()
-                    await self.app(scope, receive, send)
-                    return
-            # Bypass user not found in DB — fall through to normal auth
-            logger.warning(
-                "mcp.bypass_user_not_found email=%s", settings.bypass_user,
-            )
-
         # Log all MCP requests for debugging
         logger.info(
             "mcp.request method=%s path=%s has_auth=%s",
@@ -665,7 +619,33 @@ class MCPAuthMiddleware:
             return
 
         if user is None:
-            # No token provided — return 401 with WWW-Authenticate header
+            # --- OAuth bypass (temporary single-user mode) ---
+            # When QMEMORY_BYPASS_KEY env var exists, skip OAuth entirely
+            # and route all unauthenticated requests to the bypass user.
+            # This is a workaround for Claude.ai's broken OAuth flow.
+            #
+            # TO RE-ENABLE MULTI-USER OAUTH:
+            #   1. Run: railway variables delete QMEMORY_BYPASS_KEY --service qmemory-api
+            #   2. bypass_key becomes None → this block is skipped
+            #   3. Normal 401 + OAuth flow takes over automatically
+            settings = get_app_settings()
+            if settings.bypass_key:
+                bypass_user = await self._resolve_bypass_user()
+                if bypass_user:
+                    user_id = bypass_user.get("id", "")
+                    if isinstance(user_id, str) and user_id.startswith("user:"):
+                        raw_id = user_id[5:]
+                        db_name = f"user_{raw_id}"
+                        try:
+                            await provision_user_db(raw_id)
+                        except Exception as exc:
+                            logger.warning("mcp.bypass_provision_failed: %s", exc)
+                        _user_db.set(db_name)
+                        logger.info("mcp.bypass_auth user=%s db=%s", settings.bypass_user, db_name)
+                        await self.app(scope, receive, send)
+                        return
+
+            # No bypass — return 401 with WWW-Authenticate header
             # This tells MCP clients (like Claude.ai) to start the OAuth flow
             logger.info("mcp.no_token — returning 401 with WWW-Authenticate")
             resource_url = str(request.base_url).rstrip("/")
