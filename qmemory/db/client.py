@@ -267,32 +267,37 @@ def generate_id(prefix: str) -> str:
 
 async def apply_schema(db: Any) -> None:
     """
-    Execute the schema.surql file against the connected database.
+    Execute all schema files against the connected database.
 
-    Reads the schema file from the qmemory/db/ package directory and
-    runs it as a single multi-statement query. The schema uses
-    "IF NOT EXISTS" everywhere, so it's safe to run multiple times
-    (idempotent).
+    Loads schema files in order: base memory schema first, then cloud
+    and OAuth extensions. All schemas use "IF NOT EXISTS" / "OVERWRITE"
+    so they're safe to run multiple times (idempotent).
 
     Args:
         db: An active SurrealDB connection (from get_db()).
 
     Raises:
-        FileNotFoundError: If schema.surql is missing from the package.
+        FileNotFoundError: If any schema file is missing from the package.
     """
-    # Find schema.surql relative to THIS file (client.py is in qmemory/db/)
-    schema_path = Path(__file__).parent / "schema.surql"
+    # Find schema files relative to THIS file (client.py is in qmemory/db/)
+    schema_dir = Path(__file__).parent
 
-    if not schema_path.exists():
-        raise FileNotFoundError(
-            f"Schema file not found at {schema_path}. "
-            "Make sure qmemory/db/schema.surql exists in the package."
-        )
+    # Order matters: base schema first, then extensions that depend on it
+    schema_files = [
+        "schema.surql",          # Base memory graph (tables, indices)
+        "schema_cloud.surql",    # Cloud: user table, api_token, owner fields
+        "schema_oauth.surql",    # OAuth 2.0: oauth_client, authorization_code
+    ]
 
-    # Read the entire schema file
-    schema_sql = schema_path.read_text(encoding="utf-8")
+    for filename in schema_files:
+        schema_path = schema_dir / filename
+        if not schema_path.exists():
+            raise FileNotFoundError(
+                f"Schema file not found at {schema_path}. "
+                f"Make sure qmemory/db/{filename} exists in the package."
+            )
+        schema_sql = schema_path.read_text(encoding="utf-8")
+        logger.info("Applying schema from %s", schema_path)
+        await db.query(schema_sql)
 
-    # Execute it — DDL statements return None, which is fine
-    logger.info("Applying schema from %s", schema_path)
-    await db.query(schema_sql)
     logger.info("Schema applied successfully")
