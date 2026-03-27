@@ -490,6 +490,12 @@ async def oauth_metadata(request: Request):
     It tells the MCP client where to send users for authorization,
     where to register as a client, and where to exchange codes for tokens.
     """
+    # When bypass mode is on, hide OAuth metadata so Claude.ai
+    # doesn't try the OAuth flow — it just POSTs to /mcp/ directly.
+    settings = get_app_settings()
+    if settings.bypass_key:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+
     base_url = _get_base_url(request)
 
     logger.info("oauth.metadata_requested base_url=%s", base_url)
@@ -514,6 +520,11 @@ async def oauth_protected_resource(request: Request):
 
     Tells MCP clients where the authorization server is for this resource.
     """
+    # When bypass mode is on, hide OAuth metadata
+    settings = get_app_settings()
+    if settings.bypass_key:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+
     base_url = _get_base_url(request)
 
     logger.info("oauth.protected_resource_requested base_url=%s", base_url)
