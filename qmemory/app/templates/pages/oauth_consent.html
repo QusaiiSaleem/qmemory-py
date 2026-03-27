@@ -46,8 +46,9 @@
             </p>
         </div>
 
-        <!-- Consent Form -->
-        <form method="post" action="/consent">
+        <!-- Consent Form — hx-boost=false so the 302 redirect to Claude.ai works
+             (HTMX can't follow cross-domain redirects via AJAX) -->
+        <form method="post" action="/consent" hx-boost="false">
             <input type="hidden" name="client_id" value="{{ client_id }}">
             <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
             <input type="hidden" name="scope" value="{{ scope }}">
