@@ -26,7 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request as StarletteRequest
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from qmemory.app.auth import resolve_api_token
@@ -570,21 +570,9 @@ class MCPAuthMiddleware:
 
         request = StarletteRequest(scope)
 
-        # Handle CORS preflight (OPTIONS) requests — browsers require this before POST
-        if request.method == "OPTIONS":
-            logger.info("mcp.cors_preflight origin=%s", request.headers.get("origin", "none"))
-            response = Response(
-                status_code=204,
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id",
-                    "Access-Control-Expose-Headers": "Mcp-Session-Id",
-                    "Access-Control-Max-Age": "86400",
-                },
-            )
-            await response(scope, receive, send)
-            return
+        # NOTE: CORS preflight (OPTIONS) is handled by CORSMiddleware on the
+        # FastAPI app — it intercepts OPTIONS before requests reach this middleware.
+        # No duplicate CORS handling needed here.
 
         # Log all MCP requests for debugging
         logger.info(

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from qmemory.app.routes.auth import get_session_user
@@ -345,34 +345,34 @@ async def token(
     # Validate grant_type
     if grant_type != "authorization_code":
         logger.warning("oauth.token_failed reason=unsupported_grant_type got=%s", grant_type)
-        return {"error": "unsupported_grant_type", "error_description": "Only 'authorization_code' is supported"}
+        return JSONResponse({"error": "unsupported_grant_type", "error_description": "Only 'authorization_code' is supported"}, status_code=400)
 
     # Validate client exists
     client = await _get_client_by_id(client_id)
     if not client:
         logger.warning("oauth.token_failed reason=unknown_client client_id=%s", client_id)
-        return {"error": "invalid_client", "error_description": "Unknown client"}
+        return JSONResponse({"error": "invalid_client", "error_description": "Unknown client"}, status_code=401)
 
     # Verify client secret IF provided (optional when PKCE is used)
     if client_secret:
         secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
         if secret_hash != client.get("secret_hash"):
             logger.warning("oauth.token_failed reason=invalid_secret client_id=%s", client_id)
-            return {"error": "invalid_client", "error_description": "Invalid client secret"}
+            return JSONResponse({"error": "invalid_client", "error_description": "Invalid client secret"}, status_code=401)
     elif not code_verifier:
         # Must have at least one: client_secret or PKCE code_verifier
         logger.warning("oauth.token_failed reason=no_auth_method client_id=%s", client_id)
-        return {"error": "invalid_request", "error_description": "Either client_secret or code_verifier required"}
+        return JSONResponse({"error": "invalid_request", "error_description": "Either client_secret or code_verifier required"}, status_code=400)
 
     # Validate authorization code
     if not code:
         logger.warning("oauth.token_failed reason=missing_code")
-        return {"error": "invalid_request", "error_description": "Missing authorization code"}
+        return JSONResponse({"error": "invalid_request", "error_description": "Missing authorization code"}, status_code=400)
 
     auth_code = await _get_and_consume_auth_code(code)
     if not auth_code:
         logger.warning("oauth.token_failed reason=invalid_or_expired_code")
-        return {"error": "invalid_grant", "error_description": "Invalid or expired authorization code"}
+        return JSONResponse({"error": "invalid_grant", "error_description": "Invalid or expired authorization code"}, status_code=400)
 
     # Validate client_id matches
     auth_client_id = auth_code.get("client_id", "")
@@ -380,7 +380,7 @@ async def token(
         auth_client_id = auth_client_id.get("id", "")
     if auth_client_id != client_id and not auth_client_id.endswith(f":{client_id}"):
         logger.warning("oauth.token_failed reason=client_mismatch expected=%s got=%s", auth_client_id, client_id)
-        return {"error": "invalid_grant", "error_description": "Authorization code was issued to a different client"}
+        return JSONResponse({"error": "invalid_grant", "error_description": "Authorization code was issued to a different client"}, status_code=400)
 
     # Validate redirect_uri matches
     if redirect_uri and redirect_uri != auth_code.get("redirect_uri"):
@@ -388,20 +388,20 @@ async def token(
             "oauth.token_failed reason=redirect_mismatch expected=%s got=%s",
             auth_code.get("redirect_uri"), redirect_uri,
         )
-        return {"error": "invalid_grant", "error_description": "Redirect URI mismatch"}
+        return JSONResponse({"error": "invalid_grant", "error_description": "Redirect URI mismatch"}, status_code=400)
 
     # Validate PKCE if the auth code had a challenge
     if auth_code.get("code_challenge"):
         if not code_verifier:
             logger.warning("oauth.token_failed reason=missing_pkce_verifier")
-            return {"error": "invalid_grant", "error_description": "PKCE code_verifier required"}
+            return JSONResponse({"error": "invalid_grant", "error_description": "PKCE code_verifier required"}, status_code=400)
         if not _verify_pkce(
             code_verifier,
             auth_code["code_challenge"],
             auth_code.get("code_challenge_method", "S256"),
         ):
             logger.warning("oauth.token_failed reason=pkce_verification_failed")
-            return {"error": "invalid_grant", "error_description": "PKCE verification failed"}
+            return JSONResponse({"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400)
 
     # Get user ID from auth code
     user_id = auth_code.get("user_id", "")
@@ -483,7 +483,7 @@ async def register_client(request: Request):
 
     # Validate redirect_uris
     if not redirect_uris:
-        return {"error": "invalid_client_metadata", "error_description": "redirect_uris required"}
+        return JSONResponse({"error": "invalid_client_metadata", "error_description": "redirect_uris required"}, status_code=400)
 
     # Generate a unique client_id
     client_id = secrets.token_urlsafe(16)
@@ -512,10 +512,15 @@ async def register_client(request: Request):
     logger.info("oauth.client_registered client_id=%s client_name=%s", client_id, client_name)
 
     # Return the registration response (RFC 7591 Section 3.2.1)
-    return {
-        "client_id": client_id,
-        "client_name": client_name,
-        "redirect_uris": redirect_uris,
-        "grant_types": grant_types,
-        "token_endpoint_auth_method": token_endpoint_auth_method,
-    }
+    # Must be HTTP 201 Created with client_id_issued_at
+    return JSONResponse(
+        {
+            "client_id": client_id,
+            "client_name": client_name,
+            "redirect_uris": redirect_uris,
+            "grant_types": grant_types,
+            "token_endpoint_auth_method": token_endpoint_auth_method,
+            "client_id_issued_at": int(datetime.now(timezone.utc).timestamp()),
+        },
+        status_code=201,
+    )
