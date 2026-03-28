@@ -339,20 +339,35 @@ async def _tier0_source_type(
         scope_clause = 'AND (scope = $scope OR scope = "global")'
         params["scope"] = scope
 
-    # Inline subquery: get memory IDs from relates edges, then filter.
-    # The inner LIMIT caps the subquery to avoid scanning all 8000+ edges.
-    surql = f"""
-    SELECT * FROM memory
+    # Two-step approach: first get memory IDs from relates edges,
+    # then fetch those memories by ID. Avoids slow nested IN subquery.
+    ids_surql = "SELECT VALUE in FROM relates WHERE type = $rel_type LIMIT 200;"
+    id_results = await query(db, ids_surql, {"rel_type": source_type})
+
+    if not id_results or not isinstance(id_results, list):
+        return []
+
+    # Deduplicate IDs
+    mem_ids = list(dict.fromkeys(str(rid) for rid in id_results if rid))
+    if not mem_ids:
+        return []
+
+    # Cap to prevent huge queries
+    mem_ids = mem_ids[:200]
+
+    # Build the SELECT FROM [id1, id2, ...] query
+    id_list = ", ".join(mem_ids)
+    fetch_surql = f"""
+    SELECT * FROM [{id_list}]
     WHERE is_active = true
         AND (valid_until IS NONE OR valid_until > time::now())
         {text_clause}
         {scope_clause}
-        AND id IN (SELECT VALUE in FROM relates WHERE type = $rel_type LIMIT 500)
     ORDER BY salience DESC
     LIMIT $limit;
     """
 
-    result = await query(db, surql, params)
+    result = await query(db, fetch_surql, params)
     if result and isinstance(result, list):
         return result
     return []
