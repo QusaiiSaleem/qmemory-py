@@ -152,6 +152,15 @@ HTTP requires `Authorization: Bearer qm_ak_xxx`. Stdio has no auth (runs locally
 | `qmemory_person` | No | Create/find person with linked identities |
 | `qmemory_import` | No | Import markdown file (stub — not yet implemented) |
 
+## Book Knowledge
+
+Memory contains insights extracted from 71 books (8,500+ linked ideas).
+To access them, use the `source_type` parameter on `qmemory_search`:
+
+- All book insights: `qmemory_search(source_type="from_book")`
+- Book insights on a topic: `qmemory_search(query="leadership", source_type="from_book")`
+- Link a memory to a book insight: `qmemory_link(from_id="memory:xxx", to_id="memory:yyy", type="supports")`
+
 ## Graph Model
 
 - **Nodes**: memory, entity, session, message, tool_call, scratchpad, metrics
