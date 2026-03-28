@@ -107,6 +107,7 @@ async def qmemory_search(
     scope: str | None = None,
     limit: int = 10,
     include_tool_calls: bool = False,
+    source_type: str | None = None,
 ) -> str:
     """Search cross-session memory by meaning, category, or scope.
 
@@ -122,16 +123,20 @@ async def qmemory_search(
         scope:             Filter visibility: global, project:xxx, topic:xxx
         limit:             Max results to return (default 10, max 50).
         include_tool_calls: Also search past tool call history (default False).
+        source_type:       Filter by relation type pointing to the memory.
+                           E.g. "from_book" returns only memories extracted from books.
+                           Common values: from_book, supports, contradicts, inferred.
 
     Returns JSON with {"results": [...], "_nudge": "..."}.
     Each result includes connection hints so you can follow graph edges.
     """
     start = time.monotonic()
     logger.info(
-        "Tool call: qmemory_search(query=%s, category=%s, limit=%d)",
+        "Tool call: qmemory_search(query=%s, category=%s, limit=%d, source_type=%s)",
         query,
         category,
         limit,
+        source_type,
     )
 
     from qmemory.core.search import search_memories
@@ -142,6 +147,7 @@ async def qmemory_search(
         scope=scope,
         limit=limit,
         include_tool_calls=include_tool_calls,
+        source_type=source_type,
     )
 
     elapsed = time.monotonic() - start

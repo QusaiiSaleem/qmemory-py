@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy everything then install
 COPY . .
+# Force rebuild: 2026-03-28-v2
 RUN pip install --no-cache-dir .
 
 EXPOSE 8080
