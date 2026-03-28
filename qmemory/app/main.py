@@ -180,18 +180,30 @@ async def qmemory_save(
         content:       The fact to remember. One clear statement.
                        Example: "Qusai prefers concise bullet points over paragraphs"
         category:      What type of fact this is:
-                       self, style, preference, context, decision,
-                       idea, feedback, domain
+                       self       — what the agent knows about itself
+                       style      — communication preferences (tone, format)
+                       preference — general user preferences
+                       context    — facts about projects, orgs, situations
+                       decision   — past decisions made, with rationale
+                       idea       — future plans or proposals
+                       feedback   — user corrections and error reports
+                       domain     — sector/domain knowledge
         salience:      Importance 0.0-1.0. High-salience memories are recalled first.
+                       0.9+ = critical, 0.7 = important, 0.5 = normal, 0.3 = low
         scope:         Who can see this: global | project:xxx | topic:xxx
         confidence:    How certain are you? 0.0-1.0. Use < 0.5 for hypotheses.
-        source_person: Who said this? Pass entity ID if known.
-        evidence_type: How was this learned? observed | reported | inferred | self
-        context_mood:  Situation when learned:
+        source_person: Who said this? Pass entity ID (e.g. "ent1234abc") if known.
+        evidence_type: How was this learned?
+                       observed  — you witnessed it directly
+                       reported  — someone told you
+                       inferred  — you deduced it
+                       self      — the agent learned this about itself
+        context_mood:  Situation when this was learned:
                        calm_decision | heated_discussion | brainstorm |
                        correction | casual | urgent
 
-    Returns JSON with action (ADD/UPDATE/NOOP), memory_id, and a nudge.
+    Returns JSON with action (ADD/UPDATE/NOOP), memory_id, and a nudge
+    suggesting which nearby memories to link with qmemory_link.
     """
     start = time.monotonic()
     logger.info(
@@ -234,11 +246,24 @@ async def qmemory_correct(
 ) -> str:
     """Fix or delete a memory. Preserves full audit trail via soft-delete.
 
+    We NEVER hard-delete memories — soft-delete only (is_active = false).
+    The "correct" action creates a version chain (prev_version edge) so you
+    can always trace back through a fact's history.
+
     Args:
         memory_id:   Full record ID, e.g. "memory:mem1710864000000abc".
-        action:      What to do: correct | delete | update | unlink
+                     Get this from qmemory_search results.
+        action:      What to do:
+                     correct — Replace content. Creates a new version, soft-deletes old.
+                               Requires new_content.
+                     delete  — Soft-delete only. Sets is_active=false. Fact stays in DB.
+                     update  — Change metadata (salience, scope, confidence, etc.)
+                               without creating a new version. Requires updates dict.
+                     unlink  — Remove a relates edge (not the node). Requires edge_id.
         new_content: The corrected fact text. Required when action="correct".
         updates:     Metadata fields to change. Required when action="update".
+                     Allowed keys: salience, scope, valid_until, category, confidence.
+                     Example: {"salience": 0.9, "scope": "project:qmemory"}
         edge_id:     The relates edge ID to delete. Required when action="unlink".
         reason:      Optional note explaining why this change was made.
 
@@ -282,10 +307,19 @@ async def qmemory_link(
 ) -> str:
     """Create a relationship edge between any two nodes in the memory graph.
 
+    This is what turns a flat list of facts into a connected knowledge graph.
+    The relationship type can be ANYTHING meaningful — there is no fixed list.
+    Choose a type that describes WHY these two things are connected.
+
     Args:
-        from_id:           Source node ID (e.g. "memory:mem1710864000000abc").
+        from_id:           Source node ID. Examples:
+                           "memory:mem1710864000000abc"
+                           "entity:ent1710864000000xyz"
         to_id:             Target node ID. Can be a different table type.
-        relationship_type: Any string (supports, contradicts, caused_by, etc.).
+        relationship_type: Any string. Examples:
+                           supports, contradicts, caused_by, depends_on,
+                           belongs_to_topic, has_identity, related_to,
+                           blocks, inspired_by, summarizes, expands_on
         reason:            Optional note explaining why this connection exists.
         confidence:        How confident in this connection? 0.0-1.0.
 
@@ -327,14 +361,24 @@ async def qmemory_person(
 ) -> str:
     """Create or find a person entity with linked identities across systems.
 
+    A person can have multiple contact identities — Telegram, WhatsApp,
+    email, etc. — all linked via has_identity edges. If a person with this
+    name already exists, returns the existing record (no duplicate created).
+
     Args:
         name:     The person's display name. Example: "Ahmed Al-Rashid"
         aliases:  Optional alternative names or nicknames.
+                  Example: ["Ahmed", "Abu Omar"]
         contacts: Optional list of contact identities. Each dict needs:
                   - system:  "telegram", "whatsapp", "email", "smartsheet"
-                  - handle:  The identifier in that system
+                  - handle:  The identifier in that system (username, email, ID)
+                  Example: [
+                    {"system": "telegram", "handle": "@ahmed_rashid"},
+                    {"system": "email", "handle": "ahmed@example.com"}
+                  ]
 
-    Returns JSON with entity_id, contact_ids, links_created, and action.
+    Returns JSON with entity_id, contact_ids, links_created, and
+    action ("created" or "found").
     """
     start = time.monotonic()
     logger.info("Tool call: qmemory_person(name=%s)", name)

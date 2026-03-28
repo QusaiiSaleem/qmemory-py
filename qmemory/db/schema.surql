@@ -144,6 +144,7 @@ DEFINE FIELD IF NOT EXISTS created_by        ON relates TYPE string        DEFAU
 DEFINE FIELD IF NOT EXISTS created_at        ON relates TYPE datetime      DEFAULT time::now();
 
 DEFINE INDEX IF NOT EXISTS idx_relates_type ON relates FIELDS type;
+DEFINE INDEX IF NOT EXISTS idx_relates_type_in ON relates FIELDS type, in;
 DEFINE INDEX IF NOT EXISTS idx_relates_created_by ON relates FIELDS created_by;
 
 -- ============================================================

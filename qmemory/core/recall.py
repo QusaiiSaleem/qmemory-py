@@ -356,9 +356,13 @@ async def _tier0_source_type(
     mem_ids = mem_ids[:200]
 
     # Build the SELECT FROM [id1, id2, ...] query
+    # Exclude embedding field — it's a huge float array that wastes agent tokens
     id_list = ", ".join(mem_ids)
     fetch_surql = f"""
-    SELECT * FROM [{id_list}]
+    SELECT id, content, category, salience, scope, confidence,
+           created_at, is_active, valid_until, evidence_type,
+           source_person, recall_count, linked
+    FROM [{id_list}]
     WHERE is_active = true
         AND (valid_until IS NONE OR valid_until > time::now())
         {text_clause}
