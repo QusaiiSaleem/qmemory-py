@@ -71,6 +71,9 @@ Cloud schema adds user accounts, API tokens, and owner-based row isolation:
 
 - **`http_app(path="/")` NOT `path="/mcp/"`** — `api.mount("/mcp", ...)` strips the prefix before passing to FastMCP. Using `path="/mcp/"` causes 404.
 - **Schema loader must load ALL .surql files** — `apply_schema()` in `db/client.py` loads 3 files in order: `schema.surql` → `schema_cloud.surql` → `schema_oauth.surql`. Missing a file causes silent failures (tables don't exist, queries return empty).
+- **Dockerfile must COPY before pip install** — `COPY . .` then `RUN pip install .`. If you split them (copy pyproject.toml first, install, then copy source), Docker caches the old package and new code changes don't deploy.
+- **SurrealDB v3 LET vars don't persist** — `LET $x = (...); SELECT FROM $x;` fails. Use inline subqueries or two-step Python-side approach instead.
+- **`SELECT *` includes embedding** — Always use explicit field lists in queries to avoid returning 1024-float embedding arrays that waste agent context tokens.
 
 ## Architecture
 
@@ -91,7 +94,7 @@ qmemory/
   db/schema_cloud.surql          # Multi-user: user table, access rules, owner fields
   db/schema_cloud_permissions.surql  # Row-level permissions (owner isolation)
   core/              # Business logic
-    recall.py        #   4-tier recall pipeline + assemble_context()
+    recall.py        #   5-tier recall pipeline (Tier 0: source_type + Tiers 1-4) + assemble_context()
     save.py          #   Save memory with auto-dedup
     search.py        #   BM25 + vector search with graph enrichment
     correct.py       #   Fix/delete/update/unlink memories (soft-delete only)
@@ -135,12 +138,18 @@ surrealdb/           # Railway SurrealDB service (separate container)
 
 - Tests use a **separate namespace** (`qmemory_test`) — never touches production data.
 - The `db` fixture in `tests/conftest.py` applies schema, yields connection, then `REMOVE NAMESPACE` on cleanup.
-- 9 known failing tests — all the same issue: SurrealDB edge queries with `WHERE in = type::record(...)` return empty in test sequences. Core logic works; it's a test query pattern issue.
+- 9 known failing tests — all the same issue: SurrealDB v3 edge queries with `<-.id` syntax and `WHERE in = type::record(...)` return empty. Core logic works; it's a SurrealDB v3 syntax change.
 
 ## MCP Tools (7 total)
 
 Two transports: **stdio** (Claude Code, local, `qmemory serve`) and **HTTP** (Claude.ai, remote, `https://mem0.qusai.org/mcp/`).
-HTTP requires `Authorization: Bearer qm_ak_xxx`. Stdio has no auth (runs locally).
+HTTP is open access (no auth). Stdio has no auth (runs locally).
+
+**IMPORTANT**: Tools are defined in TWO places — keep them in sync:
+- `qmemory/mcp/server.py` — stdio transport (Claude Code)
+- `qmemory/app/main.py` — HTTP transport (Claude.ai)
+
+When adding/changing tool parameters, update BOTH files.
 
 | Tool | Read-only | Purpose |
 |------|-----------|---------|
@@ -164,7 +173,9 @@ To access them, use the `source_type` parameter on `qmemory_search`:
 ## Graph Model
 
 - **Nodes**: memory, entity, session, message, tool_call, scratchpad, metrics
-- **Edge**: `relates` — single edge table with `type` field for any relationship (supports, contradicts, caused_by, has_identity, etc.)
+- **Edge**: `relates` — single edge table with `type` field for any relationship (supports, contradicts, caused_by, has_identity, from_book, etc.)
+  - `in` = source node, `out` = target node (e.g. `from_book`: memory is `in`, book entity is `out`)
+  - Indexed: `idx_relates_type`, `idx_relates_type_in` (compound for source_type queries)
 - **8 memory categories**: self, style, preference, context, decision, idea, feedback, domain
   - `self` memories are always injected first in context
 
