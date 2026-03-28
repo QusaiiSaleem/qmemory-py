@@ -339,15 +339,15 @@ async def _tier0_source_type(
         scope_clause = 'AND (scope = $scope OR scope = "global")'
         params["scope"] = scope
 
+    # Two-step query: first get memory IDs from relates edges, then fetch those memories.
+    # Using a subquery with 8000+ IDs in a single IN clause is too slow.
     surql = f"""
-    SELECT * FROM memory
+    LET $mem_ids = (SELECT VALUE in FROM relates WHERE type = $rel_type LIMIT 500);
+    SELECT * FROM $mem_ids
     WHERE is_active = true
         AND (valid_until IS NONE OR valid_until > time::now())
         {text_clause}
         {scope_clause}
-        AND id IN (
-            SELECT VALUE in FROM relates WHERE type = $rel_type AND in IS NOT NONE
-        )
     ORDER BY salience DESC
     LIMIT $limit;
     """
