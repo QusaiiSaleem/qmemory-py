@@ -346,7 +346,7 @@ async def _tier0_source_type(
         {text_clause}
         {scope_clause}
         AND id IN (
-            SELECT VALUE out FROM relates WHERE type = $rel_type AND out IS NOT NONE
+            SELECT VALUE in FROM relates WHERE type = $rel_type AND in IS NOT NONE
         )
     ORDER BY salience DESC
     LIMIT $limit;
