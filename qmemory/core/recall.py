@@ -153,6 +153,7 @@ async def recall(
     min_salience: float | None = None,
     token_budget: int | None = None,
     owner_id: str | None = None,
+    source_type: str | None = None,
     db: Any = None,
 ) -> list[dict]:
     """
@@ -174,6 +175,9 @@ async def recall(
                        excluded from Tier 3 (category) and Tier 4 (recent).
         token_budget:  If set, trim results to fit within this many tokens
                        (estimated at ~4 chars per token).
+        source_type:   Filter to memories linked via a specific relation type.
+                       E.g. "from_book" returns only memories extracted from books.
+                       Uses the `relates.type` field on edges pointing TO the memory.
         db:            Optional SurrealDB connection. If None, creates a
                        fresh one via get_db().
 
@@ -192,14 +196,14 @@ async def recall(
         # Test mode: use the provided connection directly
         collected = await _run_tiers(
             query_text, scope, categories, limit, min_salience,
-            target_count, db,
+            target_count, source_type, db,
         )
     else:
         # Production mode: create a fresh connection for this operation
         async with get_db() as conn:
             collected = await _run_tiers(
                 query_text, scope, categories, limit, min_salience,
-                target_count, conn,
+                target_count, source_type, conn,
             )
 
     # --- Merge: deduplicate by ID ---
@@ -234,6 +238,7 @@ async def _run_tiers(
     limit: int,
     min_salience: float | None,
     target_count: int,
+    source_type: str | None,
     db: Any,
 ) -> list[dict]:
     """
@@ -241,8 +246,23 @@ async def _run_tiers(
 
     Each tier only runs if previous tiers haven't collected enough results.
     This saves unnecessary database round-trips.
+
+    When source_type is set (e.g. "from_book"), a dedicated query runs FIRST
+    to find memories linked via that relation type. The normal tiers still
+    run afterward to fill remaining slots (text search within those results).
     """
     collected: list[dict] = []
+
+    # --- Tier 0: Source-type filter (e.g. "from_book") ---
+    # When set, find memories that are the TARGET of a relates edge
+    # with the given type. Example: entity:rework →[from_book]→ memory:xyz
+    if source_type:
+        tier0 = await _tier0_source_type(source_type, query_text, scope, limit, db)
+        collected.extend(tier0)
+        logger.debug("Recall tier 0 (source_type=%s): %d memories", source_type, len(tier0))
+        # If source_type is set and we got enough, skip normal tiers
+        if len(collected) >= target_count:
+            return collected
 
     # --- Tier 1: Graph-linked memories ---
     # Find memories connected via `relates` edges to entities mentioned
@@ -282,6 +302,60 @@ async def _run_tiers(
         logger.debug("Recall tier 4 (recent): %d memories", len(tier4))
 
     return collected
+
+
+# ---------------------------------------------------------------------------
+# Tier 0: Source-type filter (e.g. from_book, supports, contradicts)
+# ---------------------------------------------------------------------------
+
+
+async def _tier0_source_type(
+    source_type: str,
+    query_text: str | None,
+    scope: str | None,
+    limit: int,
+    db: Any,
+) -> list[dict]:
+    """
+    Find memories that are targets of a specific relation type.
+
+    For example, source_type="from_book" finds all memories that have
+    an incoming edge: entity(book) →[relates type:from_book]→ memory.
+
+    If query_text is also provided, results are further filtered by
+    BM25 full-text match on the memory content.
+    """
+    params: dict[str, Any] = {"rel_type": source_type, "limit": limit}
+
+    # Optional text filter — narrows results within the source type
+    text_clause = ""
+    if query_text:
+        text_clause = "AND content @@ $query"
+        params["query"] = query_text
+
+    # Optional scope filter
+    scope_clause = ""
+    if scope and scope != "any":
+        scope_clause = 'AND (scope = $scope OR scope = "global")'
+        params["scope"] = scope
+
+    surql = f"""
+    SELECT * FROM memory
+    WHERE is_active = true
+        AND (valid_until IS NONE OR valid_until > time::now())
+        {text_clause}
+        {scope_clause}
+        AND id IN (
+            SELECT VALUE out FROM relates WHERE type = $rel_type AND out IS NOT NONE
+        )
+    ORDER BY salience DESC
+    LIMIT $limit;
+    """
+
+    result = await query(db, surql, params)
+    if result and isinstance(result, list):
+        return result
+    return []
 
 
 # ---------------------------------------------------------------------------

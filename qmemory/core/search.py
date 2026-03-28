@@ -62,6 +62,7 @@ async def search_memories(
     limit: int = 20,
     include_tool_calls: bool = False,
     owner_id: str | None = None,
+    source_type: str | None = None,
     db: Any = None,
 ) -> dict:
     """
@@ -130,6 +131,7 @@ async def search_memories(
             categories=categories,
             limit=limit,
             owner_id=owner_id,
+            source_type=source_type,
             db=db,
         )
     else:
@@ -143,6 +145,7 @@ async def search_memories(
                 categories=categories,
                 limit=limit,
                 owner_id=owner_id,
+                source_type=source_type,
                 db=conn,
             )
             # Run graph enrichment on the same connection
