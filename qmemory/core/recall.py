@@ -58,6 +58,14 @@ logger = logging.getLogger(__name__)
 # How many memories the "recent fallback" tier fetches
 RECENT_FALLBACK_LIMIT = 15
 
+# Explicit field list for memory queries — excludes `embedding` (1024 floats)
+# to avoid wasting agent context tokens on raw vector data.
+MEMORY_FIELDS = (
+    "id, content, category, salience, scope, confidence, source_type, "
+    "evidence_type, is_active, linked, recall_count, last_recalled, "
+    "context_mood, source_person, prev_version, valid_until, created_at, updated_at"
+)
+
 # Minimum query length before we attempt graph traversal (Tier 1)
 # Short queries like "hi" or "ok" won't produce useful entity matches
 MIN_QUERY_LENGTH_FOR_GRAPH = 10
@@ -439,7 +447,7 @@ async def _tier1_graph_linked(
         WHERE {" OR ".join(match_conditions)}
         LIMIT 10
     );
-    SELECT * FROM memory
+    SELECT {MEMORY_FIELDS} FROM memory
     WHERE is_active = true
         AND (valid_until IS NONE OR valid_until > time::now())
         {scope_filter}
@@ -509,7 +517,7 @@ async def _tier2_search(
     # Uses SurrealDB's @@ operator for full-text matching.
     # Falls back to salience ordering since search::score() is broken in v3.
     bm25_surql = f"""
-    SELECT * FROM memory
+    SELECT {MEMORY_FIELDS} FROM memory
     WHERE content @@ $query
         AND is_active = true
         {scope_clause}
@@ -539,7 +547,7 @@ async def _tier2_search(
                 vec_params["scope"] = scope
 
             vec_surql = f"""
-            SELECT *, vector::similarity::cosine(embedding, $query_vec) AS vec_score
+            SELECT {MEMORY_FIELDS}, vector::similarity::cosine(embedding, $query_vec) AS vec_score
             FROM memory
             WHERE is_active = true
                 AND embedding IS NOT NONE
@@ -591,7 +599,7 @@ async def _tier3_category_filter(
         params["scope"] = scope
 
     surql = f"""
-    SELECT * FROM memory
+    SELECT {MEMORY_FIELDS} FROM memory
     WHERE category IN $cats
         AND is_active = true
         AND salience >= $min_salience
@@ -631,7 +639,7 @@ async def _tier4_recent_fallback(
         params["scope"] = scope
 
     surql = f"""
-    SELECT * FROM memory
+    SELECT {MEMORY_FIELDS} FROM memory
     WHERE is_active = true
         {scope_clause}
         AND (valid_until IS NONE OR valid_until > time::now())
