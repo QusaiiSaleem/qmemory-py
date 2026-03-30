@@ -73,7 +73,7 @@ Cloud schema adds user accounts, API tokens, and owner-based row isolation:
 - **Schema loader must load ALL .surql files** — `apply_schema()` in `db/client.py` loads 3 files in order: `schema.surql` → `schema_cloud.surql` → `schema_oauth.surql`. Missing a file causes silent failures (tables don't exist, queries return empty).
 - **Dockerfile must COPY before pip install** — `COPY . .` then `RUN pip install .`. If you split them (copy pyproject.toml first, install, then copy source), Docker caches the old package and new code changes don't deploy.
 - **SurrealDB v3 LET vars don't persist** — `LET $x = (...); SELECT FROM $x;` fails. Use inline subqueries or two-step Python-side approach instead.
-- **`SELECT *` includes embedding** — Always use explicit field lists in queries to avoid returning 1024-float embedding arrays that waste agent context tokens.
+- **`SELECT *` includes embedding** — Always use `MEMORY_FIELDS` constant from `recall.py` (or explicit field lists) in queries. Never `SELECT *` from memory/entity — the 1024-float embedding array wastes agent context tokens (~10KB per record).
 
 ## Architecture
 
@@ -133,6 +133,8 @@ surrealdb/           # Railway SurrealDB service (separate container)
 - **Soft-delete only** — memories are never hard-deleted. `is_active = false` for deleted items.
 - **Config via env** — all settings in `qmemory/config.py` via Pydantic Settings. `get_settings()` is cached (call `.cache_clear()` in tests).
 - **Railway SurrealDB uses custom Dockerfile** — NOT the official `surrealdb/surrealdb:v3` image. The official image runs as non-root, causing permission errors with Railway volumes. The custom Debian image in `surrealdb/Dockerfile` fixes this.
+- **HNSW indexes use TYPE I16** — Both `memory` and `entity` tables have HNSW vector indexes with `TYPE I16 DIST COSINE EFC 150 M 12`. I16 uses 75% less RAM than the F64 default with <1% recall loss. SurrealDB auto-quantizes float embeddings to I16 internally — no code changes needed. Never use the default (F64) for new indexes.
+- **MEMORY_FIELDS constant** — `recall.py` defines `MEMORY_FIELDS` with all memory fields except `embedding`. Use this in all SELECT queries to avoid returning 1024-float arrays. Vector search query adds `vec_score` alongside `MEMORY_FIELDS`.
 
 ## Testing
 
