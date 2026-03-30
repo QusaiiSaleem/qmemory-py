@@ -84,6 +84,12 @@ DEFINE INDEX IF NOT EXISTS idx_memory_evidence_type ON memory FIELDS evidence_ty
 DEFINE INDEX IF NOT EXISTS idx_memory_recall_count  ON memory FIELDS recall_count;
 DEFINE INDEX IF NOT EXISTS idx_memory_source_person ON memory FIELDS source_person;
 
+-- HNSW vector index — I16 saves 75% RAM vs F64 default, <1% recall loss
+-- SurrealDB auto-quantizes float embeddings to I16 internally
+DEFINE INDEX IF NOT EXISTS idx_memory_embedding ON memory
+  FIELDS embedding
+  HNSW DIMENSION 1024 TYPE I16 DIST COSINE EFC 150 M 12;
+
 -- ============================================================
 -- NODE: entity
 -- ============================================================
@@ -103,6 +109,11 @@ DEFINE FIELD IF NOT EXISTS updated_at       ON entity TYPE datetime       DEFAUL
 DEFINE INDEX IF NOT EXISTS idx_entity_name ON entity FIELDS name;
 DEFINE INDEX IF NOT EXISTS idx_entity_type ON entity FIELDS type;
 DEFINE INDEX IF NOT EXISTS idx_entity_external ON entity FIELDS external_source, external_id;
+
+-- HNSW vector index — matches memory table config
+DEFINE INDEX IF NOT EXISTS idx_entity_embedding ON entity
+  FIELDS embedding
+  HNSW DIMENSION 1024 TYPE I16 DIST COSINE EFC 150 M 12;
 
 -- ============================================================
 -- EDGE: has_message (structural)
