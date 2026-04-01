@@ -95,6 +95,7 @@ qmemory/
   db/schema_cloud_permissions.surql  # Row-level permissions (owner isolation)
   core/              # Business logic
     recall.py        #   5-tier recall pipeline (Tier 0: source_type + Tiers 1-4) + assemble_context()
+    books.py         #   Hierarchical book browsing (list_books, list_sections, read_section)
     save.py          #   Save memory with auto-dedup
     search.py        #   BM25 + vector search with graph enrichment
     correct.py       #   Fix/delete/update/unlink memories (soft-delete only)
@@ -142,7 +143,7 @@ surrealdb/           # Railway SurrealDB service (separate container)
 - The `db` fixture in `tests/conftest.py` applies schema, yields connection, then `REMOVE NAMESPACE` on cleanup.
 - 9 known failing tests — all the same issue: SurrealDB v3 edge queries with `<-.id` syntax and `WHERE in = type::record(...)` return empty. Core logic works; it's a SurrealDB v3 syntax change.
 
-## MCP Tools (7 total)
+## MCP Tools (8 total)
 
 Two transports: **stdio** (Claude Code, local, `qmemory serve`) and **HTTP** (Claude.ai, remote, `https://mem0.qusai.org/mcp/`).
 HTTP is open access (no auth). Stdio has no auth (runs locally).
@@ -162,6 +163,7 @@ When adding/changing tool parameters, update BOTH files.
 | `qmemory_link` | No | Create relationship edge between any nodes |
 | `qmemory_person` | No | Create/find person with linked identities |
 | `qmemory_import` | No | Import markdown file (stub — not yet implemented) |
+| `qmemory_books` | Yes | Browse books: list books → sections → content |
 
 ## Book Knowledge
 
@@ -171,6 +173,17 @@ To access them, use the `source_type` parameter on `qmemory_search`:
 - All book insights: `qmemory_search(source_type="from_book")`
 - Book insights on a topic: `qmemory_search(query="leadership", source_type="from_book")`
 - Link a memory to a book insight: `qmemory_link(from_id="memory:xxx", to_id="memory:yyy", type="supports")`
+
+## Book Browsing
+
+Agents browse books hierarchically instead of flat search:
+
+- **List all books**: `qmemory_books()` or `qmemory_books(query="learning")`
+- **See sections**: `qmemory_books(book_id="entity:xxx")`
+- **Read section**: `qmemory_books(book_id="entity:xxx", section="Chapter 1")`
+- **Link to memory**: `qmemory_link(from_id="memory:chunk", to_id="memory:note", type="supports")`
+
+Memory table has a `section` field (extracted from content headers). Books are `entity` records with `type = 'book'`, linked to memories via `relates` edges with `type = 'from_book'`.
 
 ## Graph Model
 

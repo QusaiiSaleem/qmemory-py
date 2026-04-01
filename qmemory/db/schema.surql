@@ -66,6 +66,7 @@ DEFINE FIELD IF NOT EXISTS evidence_type  ON memory TYPE string         DEFAULT 
 DEFINE FIELD IF NOT EXISTS recall_count   ON memory TYPE int            DEFAULT 0;
 DEFINE FIELD IF NOT EXISTS last_recalled  ON memory TYPE option<datetime>;
 DEFINE FIELD IF NOT EXISTS context_mood   ON memory TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS section      ON memory TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS embedding    ON memory TYPE option<array<float>>;
 DEFINE FIELD IF NOT EXISTS created_at   ON memory TYPE datetime       DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_at   ON memory TYPE datetime       DEFAULT time::now();
@@ -83,6 +84,7 @@ DEFINE INDEX IF NOT EXISTS idx_memory_linked     ON memory FIELDS linked;
 DEFINE INDEX IF NOT EXISTS idx_memory_evidence_type ON memory FIELDS evidence_type;
 DEFINE INDEX IF NOT EXISTS idx_memory_recall_count  ON memory FIELDS recall_count;
 DEFINE INDEX IF NOT EXISTS idx_memory_source_person ON memory FIELDS source_person;
+DEFINE INDEX IF NOT EXISTS idx_memory_section ON memory FIELDS section;
 
 -- HNSW vector index — I16 saves 75% RAM vs F64 default, <1% recall loss
 -- SurrealDB auto-quantizes float embeddings to I16 internally

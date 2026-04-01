@@ -422,6 +422,56 @@ async def qmemory_import(file_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool 8: qmemory_books (read-only)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def qmemory_books(
+    book_id: str | None = None,
+    section: str | None = None,
+    query: str | None = None,
+) -> str:
+    """Browse books in your knowledge library — 3 levels of detail.
+
+    Level 1 — List all books:
+        qmemory_books()
+        qmemory_books(query="learning")    # search by name
+
+    Level 2 — See a book's sections:
+        qmemory_books(book_id="entity:ent123abc")
+
+    Level 3 — Read a section's content:
+        qmemory_books(book_id="entity:ent123abc", section="Chapter 1")
+
+    Args:
+        book_id:  Book entity ID. Omit to list all books.
+        section:  Section name within a book. Requires book_id.
+        query:    Search books by name (only used when book_id is omitted).
+
+    Returns JSON with books, sections, or chunks depending on the level.
+    """
+    start = time.monotonic()
+    logger.info(
+        "Tool call: qmemory_books(book_id=%s, section=%s, query=%s)",
+        book_id, section, query,
+    )
+
+    from qmemory.core.books import list_books, list_sections, read_section
+
+    if book_id and section:
+        result = await read_section(book_id=book_id, section=section)
+    elif book_id:
+        result = await list_sections(book_id=book_id)
+    else:
+        result = await list_books(query_text=query)
+
+    elapsed = time.monotonic() - start
+    logger.info("qmemory_books completed in %.2fs", elapsed)
+    return json.dumps(result, default=str, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # FastAPI app — wraps the FastMCP server + adds /health
 # ---------------------------------------------------------------------------
 
