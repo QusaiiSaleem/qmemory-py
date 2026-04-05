@@ -49,16 +49,17 @@ async def test_create_person_name_only(db):
 
     # Check all required keys are present
     assert "entity_id" in result
-    assert "contact_ids" in result
-    assert "links_created" in result
+    assert "contacts" in result
+    assert "actions" in result
+    assert "meta" in result
     assert "action" in result
 
     # entity_id should be a proper SurrealDB record ID
     assert result["entity_id"].startswith("entity:")
 
     # No contacts were passed, so these should be empty/zero
-    assert result["contact_ids"] == []
-    assert result["links_created"] == 0
+    assert result["contacts"] == []
+    assert result["meta"]["links_created"] == 0
 
     # Brand new person — action should be "created"
     assert result["action"] == "created"
@@ -113,13 +114,13 @@ async def test_create_person_with_contacts(db):
     )
 
     # Should have created 2 contacts and 2 edges
-    assert len(result["contact_ids"]) == 2
-    assert result["links_created"] == 2
+    assert len(result["contacts"]) == 2
+    assert result["meta"]["links_created"] == 2
     assert result["action"] == "created"
 
-    # Each contact_id should be a proper entity record ID
-    for cid in result["contact_ids"]:
-        assert cid.startswith("entity:")
+    # Each contact should have an entity_id that starts with "entity:"
+    for c in result["contacts"]:
+        assert c["entity_id"].startswith("entity:")
 
 
 async def test_contact_entities_exist_in_db(db):
@@ -135,8 +136,8 @@ async def test_contact_entities_exist_in_db(db):
         db=db,
     )
 
-    assert len(result["contact_ids"]) == 1
-    contact_id = result["contact_ids"][0]
+    assert len(result["contacts"]) == 1
+    contact_id = result["contacts"][0]["entity_id"]
     _, contact_suffix = contact_id.split(":", 1)
 
     # Query the contact entity directly
@@ -243,9 +244,9 @@ async def test_duplicate_contact_not_created_twice(db):
     assert second["action"] == "created"
 
     # But they should share the same contact entity_id
-    assert len(first["contact_ids"]) == 1
-    assert len(second["contact_ids"]) == 1
-    assert first["contact_ids"][0] == second["contact_ids"][0]
+    assert len(first["contacts"]) == 1
+    assert len(second["contacts"]) == 1
+    assert first["contacts"][0]["entity_id"] == second["contacts"][0]["entity_id"]
 
     # Only ONE contact entity with this handle should exist in the DB
     count_rows = await query(
@@ -281,6 +282,7 @@ async def test_find_existing_person_by_name(db):
     assert found["name"] == "Yasmin Othman"
 
     # Should also list the contact IDs
+    # find_person returns its own format with contact_ids
     assert len(found["contact_ids"]) == 1
 
 
@@ -354,8 +356,8 @@ async def test_contact_missing_system_is_skipped(db):
     assert result["entity_id"].startswith("entity:")
 
     # But no contacts were created (the malformed one was skipped)
-    assert result["contact_ids"] == []
-    assert result["links_created"] == 0
+    assert result["contacts"] == []
+    assert result["meta"]["links_created"] == 0
 
 
 async def test_contact_missing_handle_is_skipped(db):
@@ -371,8 +373,8 @@ async def test_contact_missing_handle_is_skipped(db):
     )
 
     assert result["action"] == "created"
-    assert result["contact_ids"] == []
-    assert result["links_created"] == 0
+    assert result["contacts"] == []
+    assert result["meta"]["links_created"] == 0
 
 
 async def test_create_person_with_aliases(db):
@@ -408,5 +410,5 @@ async def test_create_person_no_contacts_no_aliases(db):
     result = await create_person(name="Bare Person", db=db)
 
     assert result["action"] == "created"
-    assert result["contact_ids"] == []
-    assert result["links_created"] == 0
+    assert result["contacts"] == []
+    assert result["meta"]["links_created"] == 0

@@ -171,13 +171,13 @@ async def _handle_delete(id_suffix: str, memory_id: str, reason: str | None, db:
     )
 
     # If not found or empty result, return a not_found response
+    from qmemory.formatters.response import attach_meta
+
     if not existing:
         logger.warning("correct_memory(delete): memory %s not found", memory_id)
-        return {
-            "action": "not_found",
-            "memory_id": memory_id,
-            "_nudge": f"Memory {memory_id} was not found. Use qmemory_search to find the correct ID.",
-        }
+        return attach_meta(
+            {"ok": False, "action": "not_found", "memory_id": memory_id},
+        )
 
     # Soft-delete — set is_active = false and bump updated_at
     await query(
@@ -188,15 +188,10 @@ async def _handle_delete(id_suffix: str, memory_id: str, reason: str | None, db:
 
     logger.info("correct_memory: soft-deleted %s (reason: %s)", memory_id, reason or "none")
 
-    return {
-        "action": "deleted",
-        "memory_id": memory_id,
-        "_nudge": (
-            f"Memory {memory_id} soft-deleted (kept in DB for audit). "
-            "If other memories referenced this fact, update them too: "
-            "qmemory_search(query='...related topic...')"
-        ),
-    }
+    return attach_meta(
+        {"ok": True, "action": "deleted", "memory_id": memory_id},
+        actions_context={"type": "correct", "memory_id": memory_id},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -242,11 +237,11 @@ async def _handle_update(id_suffix: str, memory_id: str, updates: dict, reason: 
 
     # If nothing valid was provided, bail out early
     if not set_clauses:
-        return {
-            "action": "updated",
-            "memory_id": memory_id,
-            "_nudge": "No recognized fields in updates dict. Nothing was changed.",
-        }
+        from qmemory.formatters.response import attach_meta
+        return attach_meta(
+            {"ok": True, "action": "updated", "memory_id": memory_id,
+             "changes": {}},
+        )
 
     # Always bump updated_at so we know when the last edit happened
     set_clauses.append("updated_at = time::now()")
@@ -259,16 +254,19 @@ async def _handle_update(id_suffix: str, memory_id: str, updates: dict, reason: 
         params,
     )
 
+    from qmemory.formatters.response import attach_meta
+
     logger.info("correct_memory: updated %s fields=%s (reason: %s)", memory_id, list(updates.keys()), reason or "none")
 
-    return {
-        "action": "updated",
-        "memory_id": memory_id,
-        "_nudge": (
-            f"Memory {memory_id} updated ({', '.join(set_clauses[:-1])}). "
-            "Verify the change: qmemory_search(query='...fact...')"
-        ),
-    }
+    return attach_meta(
+        {
+            "ok": True,
+            "action": "updated",
+            "memory_id": memory_id,
+            "changes": {k: v for k, v in updates.items() if k in ALLOWED_UPDATE_FIELDS},
+        },
+        actions_context={"type": "correct", "memory_id": memory_id},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,16 +298,13 @@ async def _handle_unlink(edge_id: str, reason: str | None, db: Any) -> dict:
         {"table": edge_table, "id": edge_suffix},
     )
 
+    from qmemory.formatters.response import attach_meta
+
     logger.info("correct_memory: deleted edge %s (reason: %s)", edge_id, reason or "none")
 
-    return {
-        "action": "unlinked",
-        "memory_id": edge_id,  # For unlink, the "affected ID" is the edge
-        "_nudge": (
-            f"Edge {edge_id} deleted. The two memories still exist but are no longer connected. "
-            "If you want to create a correct connection instead, use: qmemory_link(...)"
-        ),
-    }
+    return attach_meta(
+        {"ok": True, "action": "unlinked", "edge_id": edge_id},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -341,14 +336,14 @@ async def _handle_correct(id_suffix: str, memory_id: str, new_content: str, reas
         {"id": id_suffix},
     )
 
+    from qmemory.formatters.response import attach_meta
+
     # Not found at all
     if not existing:
         logger.warning("correct_memory(correct): memory %s not found", memory_id)
-        return {
-            "action": "not_found",
-            "memory_id": memory_id,
-            "_nudge": f"Memory {memory_id} was not found. Use qmemory_search to find the correct ID.",
-        }
+        return attach_meta(
+            {"ok": False, "action": "not_found", "memory_id": memory_id},
+        )
 
     old_memory = existing[0]
 
@@ -441,13 +436,13 @@ async def _handle_correct(id_suffix: str, memory_id: str, new_content: str, reas
         memory_id, new_memory_id, reason or "none"
     )
 
-    return {
-        "action": "corrected",
-        "memory_id": memory_id,          # The OLD memory (now soft-deleted)
-        "new_memory_id": new_memory_id,  # The NEW memory (active, corrected)
-        "_nudge": (
-            f"Memory corrected. Old version ({memory_id}) preserved for audit. "
-            f"New version is {new_memory_id}. "
-            "Verify: qmemory_search(query='...corrected fact...')"
-        ),
-    }
+    return attach_meta(
+        {
+            "ok": True,
+            "action": "corrected",
+            "old_id": memory_id,
+            "new_id": new_memory_id,
+            "changes": {"content": f"{(old_memory.get('content', ''))[:40]} → {new_content[:40]}"},
+        },
+        actions_context={"type": "correct", "new_memory_id": new_memory_id},
+    )

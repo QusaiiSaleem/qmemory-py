@@ -227,27 +227,41 @@ async def _create_link(
             from_id, to_id, relationship_type
         )
 
+    from qmemory.formatters.response import attach_meta
+
     logger.info(
         "link_nodes: %s -[%s]-> %s (edge=%s)",
         from_id, relationship_type, to_id, edge_id
     )
 
-    # --- Step 6: Return result with a discovery nudge ---
-    # The nudge pattern: always suggest the agent's next action.
-    # Here we suggest searching the target node to discover more connections.
-    #
-    # We extract a short "name hint" from the to_id to make the nudge useful.
-    # "entity:entXXX" → suggest searching for entity content
-    # "memory:memXXX" → suggest searching for memory content
-    nudge = (
-        f"Edge created: {from_id} -[{relationship_type}]-> {to_id}. "
-        f"Explore connections: qmemory_search(query='{to_id}')"
-    )
+    # Fetch content previews for both ends
+    from_preview = ""
+    to_preview = ""
+    if from_exists and isinstance(from_exists, list) and from_exists[0]:
+        from_preview = (from_exists[0].get("content") or from_exists[0].get("name", ""))[:80] if isinstance(from_exists[0], dict) else ""
+    if to_exists and isinstance(to_exists, list) and to_exists[0]:
+        to_preview = (to_exists[0].get("content") or to_exists[0].get("name", ""))[:80] if isinstance(to_exists[0], dict) else ""
 
-    return {
-        "edge_id": edge_id,
-        "from_id": from_id,
-        "to_id": to_id,
-        "type": relationship_type,
-        "_nudge": nudge,
-    }
+    # Count edges for both endpoints
+    from_count_rows = await query(db, "SELECT count() AS c FROM relates WHERE in = <record>$id OR out = <record>$id GROUP ALL", {"id": from_id})
+    to_count_rows = await query(db, "SELECT count() AS c FROM relates WHERE in = <record>$id OR out = <record>$id GROUP ALL", {"id": to_id})
+    from_edge_count = from_count_rows[0]["c"] if from_count_rows and isinstance(from_count_rows, list) and len(from_count_rows) > 0 and isinstance(from_count_rows[0], dict) else 0
+    to_edge_count = to_count_rows[0]["c"] if to_count_rows and isinstance(to_count_rows, list) and len(to_count_rows) > 0 and isinstance(to_count_rows[0], dict) else 0
+
+    return attach_meta(
+        {
+            "edge_id": edge_id,
+            "from": {"id": from_id, "content_preview": from_preview},
+            "to": {"id": to_id, "content_preview": to_preview},
+            "relationship_type": relationship_type,
+        },
+        actions_context={
+            "type": "link",
+            "from_id": from_id,
+            "to_id": to_id,
+            "edge_count_from": from_edge_count,
+            "edge_count_to": to_edge_count,
+        },
+        edge_count_from=from_edge_count,
+        edge_count_to=to_edge_count,
+    )

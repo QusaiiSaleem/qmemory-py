@@ -305,12 +305,31 @@ async def _create_person_impl(
                 person_id, contact_id
             )
 
-    return {
-        "entity_id": person_id,
-        "contact_ids": contact_ids,
-        "links_created": links_created,
-        "action": action,
-    }
+    from qmemory.formatters.response import attach_meta
+
+    # Count memories linked to this person
+    mem_count_rows = await query(
+        db,
+        "SELECT count() AS c FROM relates WHERE in = <record>$id OR out = <record>$id GROUP ALL",
+        {"id": person_id},
+    )
+    mem_count = mem_count_rows[0]["c"] if mem_count_rows and isinstance(mem_count_rows, list) and len(mem_count_rows) > 0 and isinstance(mem_count_rows[0], dict) else 0
+
+    return attach_meta(
+        {
+            "entity_id": person_id,
+            "name": name,
+            "action": action,
+            "contacts": [
+                {"system": c.get("system", ""), "handle": c.get("handle", ""), "entity_id": cid}
+                for c, cid in zip(contacts, contact_ids)
+            ] if contacts and contact_ids else [],
+        },
+        actions_context={"type": "person", "entity_id": person_id, "memory_count": mem_count},
+        memory_count=mem_count,
+        contact_count=len(contact_ids),
+        links_created=links_created,
+    )
 
 
 async def _find_person_impl(

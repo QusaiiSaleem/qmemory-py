@@ -60,17 +60,18 @@ async def test_link_two_memories(db):
 
     # Check the shape of the returned dict
     assert "edge_id" in edge
-    assert "from_id" in edge
-    assert "to_id" in edge
-    assert "type" in edge
-    assert "_nudge" in edge
+    assert "from" in edge
+    assert "to" in edge
+    assert "relationship_type" in edge
+    assert "actions" in edge
+    assert "meta" in edge
 
     # The relationship type should be echoed back
-    assert edge["type"] == "supports"
+    assert edge["relationship_type"] == "supports"
 
     # The from/to IDs should be echoed back
-    assert edge["from_id"] == m1["memory_id"]
-    assert edge["to_id"] == m2["memory_id"]
+    assert edge["from"]["id"] == m1["memory_id"]
+    assert edge["to"]["id"] == m2["memory_id"]
 
     # The edge ID should start with "relates:" (SurrealDB format)
     assert edge["edge_id"].startswith("relates:")
@@ -94,7 +95,7 @@ async def test_link_with_confidence(db):
 
     # Should succeed with the confidence value
     assert edge is not None
-    assert edge["type"] == "contradicts"
+    assert edge["relationship_type"] == "contradicts"
     assert "edge_id" in edge
 
 
@@ -115,7 +116,7 @@ async def test_link_with_reason_only(db):
     )
 
     assert edge is not None
-    assert edge["type"] == "caused_by"
+    assert edge["relationship_type"] == "caused_by"
 
 
 async def test_link_minimal_params(db):
@@ -134,7 +135,7 @@ async def test_link_minimal_params(db):
     )
 
     assert edge is not None
-    assert edge["type"] == "relates_to"
+    assert edge["relationship_type"] == "relates_to"
 
 
 # ---------------------------------------------------------------------------

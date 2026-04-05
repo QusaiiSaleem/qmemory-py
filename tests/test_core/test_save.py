@@ -46,8 +46,9 @@ async def test_save_memory_basic(db):
     # Check the result shape
     assert result["action"] == "ADD"
     assert result["memory_id"].startswith("memory:")
-    assert "_nudge" in result
-    assert "qmemory_link" in result["_nudge"]
+    assert "actions" in result
+    assert "meta" in result
+    assert result["meta"]["indexed"] is True
 
 
 async def test_save_memory_all_fields(db):

@@ -133,15 +133,16 @@ async def save_memory(
 
     # Handle NOOP — the fact is already known, skip saving
     if decision == "NOOP":
+        from qmemory.formatters.response import attach_meta
+
         logger.info(
             "save_memory: NOOP (duplicate detected) — %s",
             dedup_result.get("reason", "")
         )
-        return {
-            "action": "NOOP",
-            "memory_id": None,
-            "_nudge": "Already known. No action taken.",
-        }
+        return attach_meta(
+            {"action": "NOOP", "memory_id": None},
+            dedup_checked=True, indexed=False,
+        )
 
     # Handle UPDATE — soft-delete the old memory before creating the new one.
     # This maintains a version chain (same pattern as correct_memory "correct" action).
@@ -277,23 +278,25 @@ async def save_memory(
     else:
         logger.warning("Failed to save memory — query returned None")
 
-    # --- Step 8: Return result with nudge ---
-    # The _nudge suggests the agent connect this memory to other nodes
-    # in the graph. This is the "mind map" pattern — always suggest
-    # a next action so the agent keeps building connections.
-    nudge = (
-        f"Memory saved as {full_memory_id}. "
-        f"Connect it: qmemory_link(from_id='{full_memory_id}', "
-        f"to_id='...', type='relates_to')"
-    )
+    # --- Step 8: Return result with actions + meta ---
+    from qmemory.formatters.response import attach_meta
 
-    # Use the actual decision ("ADD" or "UPDATE") as the action.
-    # If dedup said UPDATE but there was no old ID to delete, we still
-    # report ADD — the old memory was left active (no harm done).
     final_action = decision if decision in ("ADD", "UPDATE") else "ADD"
 
-    return {
-        "action": final_action,
-        "memory_id": full_memory_id,
-        "_nudge": nudge,
-    }
+    return attach_meta(
+        {
+            "action": final_action,
+            "memory_id": full_memory_id,
+            "content": content[:80],
+        },
+        actions_context={
+            "type": "save",
+            "memory_id": full_memory_id,
+            "content_preview": content,
+            "dedup_similar_id": dedup_result.get("update_id") if isinstance(dedup_result, dict) else None,
+        },
+        dedup_checked=True,
+        dedup_candidates=dedup_result.get("candidates", 0) if isinstance(dedup_result, dict) else 0,
+        embedding_generated=embedding is not None,
+        indexed=True,
+    )

@@ -49,24 +49,21 @@ async def list_books(
                 ORDER BY name
             """)
 
-        if not books or not isinstance(books, list):
-            return {"books": [], "_nudge": "No books found."}
+        from qmemory.formatters.response import attach_meta
 
-        return {
-            "books": [
-                {
-                    "id": str(b["id"]),
-                    "name": b.get("name", ""),
-                    "chunk_count": b.get("chunk_count", 0),
-                }
-                for b in books
-                if isinstance(b, dict)
-            ],
-            "_nudge": (
-                f"Found {len(books)} book(s). "
-                "Pick one and call qmemory_books(book_id='entity:xxx') to see its sections."
-            ),
-        }
+        if not books or not isinstance(books, list):
+            return attach_meta({"books": []}, total_books=0, level="list")
+
+        book_list = [
+            {"id": str(b["id"]), "name": b.get("name", ""), "chunk_count": b.get("chunk_count", 0)}
+            for b in books if isinstance(b, dict)
+        ]
+        return attach_meta(
+            {"books": book_list},
+            actions_context={"type": "books"},
+            total_books=len(book_list),
+            level="list",
+        )
 
     if db is not None:
         return await _run(db)
@@ -113,25 +110,24 @@ async def list_sections(
             ORDER BY section
         """)
 
-        if not sections or not isinstance(sections, list):
-            return {"book": book_name, "book_id": book_id, "sections": []}
+        from qmemory.formatters.response import attach_meta
 
-        return {
-            "book": book_name,
-            "book_id": book_id,
-            "sections": [
-                {
-                    "name": s.get("section", "Unknown"),
-                    "chunk_count": s.get("chunk_count", 0),
-                }
-                for s in sections
-                if isinstance(s, dict)
-            ],
-            "_nudge": (
-                f"Book '{book_name}' has {len(sections)} section(s). "
-                "Call qmemory_books(book_id='...', section='Chapter 1') to read a section."
-            ),
-        }
+        if not sections or not isinstance(sections, list):
+            return attach_meta(
+                {"book": book_name, "book_id": book_id, "sections": []},
+                total_sections=0, level="sections",
+            )
+
+        section_list = [
+            {"name": s.get("section", "Unknown"), "chunk_count": s.get("chunk_count", 0)}
+            for s in sections if isinstance(s, dict)
+        ]
+        return attach_meta(
+            {"book": book_name, "book_id": book_id, "sections": section_list},
+            actions_context={"type": "books", "book_id": book_id},
+            total_sections=len(section_list),
+            level="sections",
+        )
 
     if db is not None:
         return await _run(db)
@@ -176,26 +172,21 @@ async def read_section(
             ORDER BY created_at ASC
         """, {"section": section})
 
+        from qmemory.formatters.response import attach_meta
+
         if not chunks or not isinstance(chunks, list):
             chunks = []
 
-        return {
-            "book_id": book_id,
-            "section": section,
-            "chunks": [
-                {
-                    "id": str(c["id"]),
-                    "content": c.get("content", ""),
-                    "salience": c.get("salience", 0),
-                }
-                for c in chunks
-                if isinstance(c, dict)
-            ],
-            "_nudge": (
-                f"Found {len(chunks)} chunk(s). "
-                "Link useful insights: qmemory_link(from_id='memory:xxx', to_id='memory:yyy', type='supports')"
-            ),
-        }
+        chunk_list = [
+            {"id": str(c["id"]), "content": c.get("content", ""), "salience": c.get("salience", 0)}
+            for c in chunks if isinstance(c, dict)
+        ]
+        return attach_meta(
+            {"book_id": book_id, "section": section, "chunks": chunk_list},
+            actions_context={"type": "books", "book_id": book_id, "section": section},
+            total_chunks=len(chunk_list),
+            level="chunks",
+        )
 
     if db is not None:
         return await _run(db)

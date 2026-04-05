@@ -50,10 +50,11 @@ async def test_correct_memory(db):
     # --- Check the return value ---
     assert result["action"] == "corrected"
     # The new memory should have a different ID
-    assert result["new_memory_id"] != original_id
+    assert result["new_id"] != original_id
     # Both memory IDs should be present in the result
-    assert result["memory_id"] == original_id
-    assert "_nudge" in result
+    assert result["old_id"] == original_id
+    assert "actions" in result
+    assert "meta" in result
 
     # --- Verify old memory is now soft-deleted ---
     old_id_suffix = original_id.split(":")[1]
@@ -66,7 +67,7 @@ async def test_correct_memory(db):
     assert old_mem[0]["is_active"] is False  # Soft-deleted
 
     # --- Verify new memory is active with corrected content ---
-    new_id_suffix = result["new_memory_id"].split(":")[1]
+    new_id_suffix = result["new_id"].split(":")[1]
     new_mem = await query(
         db,
         "SELECT is_active, content FROM type::record('memory', $id)",
@@ -81,7 +82,7 @@ async def test_correct_memory(db):
     edges = await query(
         db,
         "SELECT * FROM prev_version WHERE in = <record>$from_id",
-        {"from_id": result["new_memory_id"]},
+        {"from_id": result["new_id"]},
     )
     assert edges is not None and len(edges) >= 1
 
@@ -109,7 +110,7 @@ async def test_correct_preserves_metadata(db):
         db=db,
     )
 
-    new_id_suffix = result["new_memory_id"].split(":")[1]
+    new_id_suffix = result["new_id"].split(":")[1]
     new_mem = await query(
         db,
         "SELECT category, salience, scope, confidence FROM type::record('memory', $id)",
@@ -149,7 +150,7 @@ async def test_delete_memory(db):
     # Check return value
     assert result["action"] == "deleted"
     assert result["memory_id"] == original_id
-    assert "_nudge" in result
+    assert "actions" in result
 
     # Verify the record STILL EXISTS but is now inactive
     id_suffix = original_id.split(":")[1]
@@ -295,7 +296,7 @@ async def test_unlink_edge(db):
     )
 
     assert result["action"] == "unlinked"
-    assert "_nudge" in result
+    assert "actions" in result
 
     # Verify the edge is GONE
     edges_after = await query(
