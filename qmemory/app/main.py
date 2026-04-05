@@ -106,29 +106,35 @@ async def qmemory_search(
     category: str | None = None,
     scope: str | None = None,
     limit: int = 10,
+    offset: int = 0,
+    after: str | None = None,
+    before: str | None = None,
     include_tool_calls: bool = False,
     source_type: str | None = None,
 ) -> str:
     """Search cross-session memory by meaning, category, or scope.
 
-    Returns memories from ALL past conversations with graph connection hints
-    and an exploration nudge. Use this to find what you know about a topic.
+    Returns memories from ALL past conversations, ranked by relevance,
+    with graph connection hints and structured next-step actions.
 
     Args:
         query:             Free-text search query (BM25 + vector similarity).
                            Leave empty to get recent memories without text search.
-        category:          Filter to one category:
+        category:          Filter to one category (HARD filter — excludes others):
                            self, style, preference, context, decision,
                            idea, feedback, domain
         scope:             Filter visibility: global, project:xxx, topic:xxx
         limit:             Max results to return (default 10, max 50).
+        offset:            Skip first N results for pagination (default 0).
+        after:             Only return memories created after this date.
+                           ISO date string, e.g. "2026-04-01".
+        before:            Only return memories created before this date.
         include_tool_calls: Also search past tool call history (default False).
         source_type:       Filter by relation type pointing to the memory.
                            E.g. "from_book" returns only memories extracted from books.
-                           Common values: from_book, supports, contradicts, inferred.
 
-    Returns JSON with {"results": [...], "_nudge": "..."}.
-    Each result includes connection hints so you can follow graph edges.
+    Returns JSON with {pinned, entities, results, actions, meta}.
+    Each result has relevance score, source_tier, and neighbor previews.
     """
     start = time.monotonic()
     logger.info(
@@ -146,6 +152,9 @@ async def qmemory_search(
         category=category,
         scope=scope,
         limit=limit,
+        offset=offset,
+        after=after,
+        before=before,
         include_tool_calls=include_tool_calls,
         source_type=source_type,
     )
@@ -153,6 +162,50 @@ async def qmemory_search(
     elapsed = time.monotonic() - start
     logger.info("qmemory_search completed in %.2fs", elapsed)
     return json.dumps(results, default=str, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 2b: qmemory_get (read-only)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def qmemory_get(
+    ids: list[str],
+    include_neighbors: bool = False,
+    neighbor_depth: int = 1,
+) -> str:
+    """Fetch memories or entities by ID with optional graph neighbor traversal.
+
+    Use this to:
+    - Retrieve specific memories when you have their IDs
+    - Explore the graph by following connections from search results
+    - Verify that saved memories exist
+
+    Args:
+        ids:                List of record IDs to fetch.
+                            Examples: ["memory:mem123abc", "entity:ent456xyz"]
+                            Max 20 IDs per call.
+        include_neighbors:  If True, also fetch connected nodes for each result.
+                            Shows what each memory is linked to in the graph.
+        neighbor_depth:     How deep to traverse connections (1 or 2). Default 1.
+
+    Returns JSON with {memories, not_found, actions, meta}.
+    """
+    start = time.monotonic()
+    logger.info("Tool call: qmemory_get(ids=%s, neighbors=%s)", ids[:3], include_neighbors)
+
+    from qmemory.core.get import get_memories
+
+    result = await get_memories(
+        ids=ids,
+        include_neighbors=include_neighbors,
+        neighbor_depth=neighbor_depth,
+    )
+
+    elapsed = time.monotonic() - start
+    logger.info("qmemory_get completed in %.2fs", elapsed)
+    return json.dumps(result, default=str, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

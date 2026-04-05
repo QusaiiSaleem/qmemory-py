@@ -143,7 +143,7 @@ surrealdb/           # Railway SurrealDB service (separate container)
 - The `db` fixture in `tests/conftest.py` applies schema, yields connection, then `REMOVE NAMESPACE` on cleanup.
 - 9 known failing tests — all the same issue: SurrealDB v3 edge queries with `<-.id` syntax and `WHERE in = type::record(...)` return empty. Core logic works; it's a SurrealDB v3 syntax change.
 
-## MCP Tools (8 total)
+## MCP Tools (9 total)
 
 Two transports: **stdio** (Claude Code, local, `qmemory serve`) and **HTTP** (Claude.ai, remote, `https://mem0.qusai.org/mcp/`).
 HTTP is open access (no auth). Stdio has no auth (runs locally).
@@ -158,6 +158,7 @@ When adding/changing tool parameters, update BOTH files.
 |------|-----------|---------|
 | `qmemory_bootstrap` | Yes | Load full memory context at conversation start |
 | `qmemory_search` | Yes | BM25 + vector search with graph hints |
+| `qmemory_get` | Yes | Fetch by ID + graph neighbor traversal |
 | `qmemory_save` | No | Save fact with evidence tracking + auto-dedup |
 | `qmemory_correct` | No | Fix, delete, update, or unlink a memory |
 | `qmemory_link` | No | Create relationship edge between any nodes |
