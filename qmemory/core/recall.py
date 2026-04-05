@@ -78,6 +78,55 @@ MAX_ENTITY_WORDS = 10
 
 
 # ---------------------------------------------------------------------------
+# Composite ranking score
+# ---------------------------------------------------------------------------
+
+
+def _compute_composite_score(memory: dict, has_query: bool) -> float:
+    """Compute a composite ranking score combining relevance, salience, and recency.
+
+    When a query is present: relevance dominates (0.6 weight).
+    When no query (browsing): salience dominates (0.7 weight).
+    """
+    salience = memory.get("salience", 0.5)
+    source_tier = memory.get("source_tier", "recent")
+
+    # Relevance based on source tier
+    if source_tier == "vector":
+        relevance = memory.get("vec_score", 0.7)
+    elif source_tier == "bm25":
+        # search::score() is broken in SurrealDB v3 — use word overlap instead
+        relevance = memory.get("_bm25_relevance", 0.5)
+    elif source_tier == "graph":
+        relevance = 0.85
+    elif source_tier == "source_type":
+        relevance = 0.8
+    else:
+        relevance = 0.3
+
+    # Recency bonus — small boost for recent memories
+    recency_bonus = 0.0
+    created_at = memory.get("created_at")
+    if created_at:
+        try:
+            if isinstance(created_at, datetime):
+                dt = created_at
+            else:
+                dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400
+            recency_bonus = max(0.0, 0.1 - (age_days * 0.002))
+        except Exception:
+            pass
+
+    if has_query:
+        return (0.6 * relevance) + (0.3 * salience) + recency_bonus
+    else:
+        return (0.7 * salience) + recency_bonus + (0.3 * relevance)
+
+
+# ---------------------------------------------------------------------------
 # Session key parsing (pure function — no DB needed)
 # ---------------------------------------------------------------------------
 
@@ -220,8 +269,11 @@ async def recall(
     deduped = _deduplicate_by_id(collected)
     logger.debug("Recall merged: %d unique memories from %d total", len(deduped), len(collected))
 
-    # --- Sort by salience DESC (most important first) ---
-    deduped.sort(key=lambda m: m.get("salience", 0), reverse=True)
+    # --- Sort by composite score DESC (relevance + salience + recency) ---
+    has_query = query_text is not None and len(query_text.strip()) > 0
+    for m in deduped:
+        m["_score"] = _compute_composite_score(m, has_query)
+    deduped.sort(key=lambda m: m["_score"], reverse=True)
 
     # --- Apply token budget if provided ---
     # Roughly estimate tokens at ~4 characters per token.
@@ -379,6 +431,8 @@ async def _tier0_source_type(
 
     result = await query(db, fetch_surql, params)
     if result and isinstance(result, list):
+        for r in result:
+            r["source_tier"] = "source_type"
         return result
     return []
 
@@ -477,6 +531,8 @@ async def _tier1_graph_linked(
                 memories.append(item)
             elif isinstance(item, list):
                 memories.extend(item)
+        for m in memories:
+            m["source_tier"] = "graph"
         return memories
 
     return []
@@ -528,6 +584,13 @@ async def _tier2_search(
 
     bm25_results = await query(db, bm25_surql, params)
     if bm25_results and isinstance(bm25_results, list):
+        # Compute word-overlap relevance since search::score() is broken in v3
+        query_words = set(query_text.lower().split())
+        for r in bm25_results:
+            r["source_tier"] = "bm25"
+            content_words = set((r.get("content") or "").lower().split())
+            overlap = len(query_words & content_words)
+            r["_bm25_relevance"] = min(1.0, overlap / max(len(query_words), 1))
         results.extend(bm25_results)
         logger.debug("Tier 2 BM25: %d results", len(bm25_results))
 
@@ -559,6 +622,8 @@ async def _tier2_search(
 
             vec_results = await query(db, vec_surql, vec_params)
             if vec_results and isinstance(vec_results, list):
+                for r in vec_results:
+                    r["source_tier"] = "vector"
                 results.extend(vec_results)
                 logger.debug("Tier 2 vector: %d results", len(vec_results))
     except Exception as e:
@@ -611,6 +676,9 @@ async def _tier3_category_filter(
 
     result = await query(db, surql, params)
     if result and isinstance(result, list):
+        for r in result:
+            if "source_tier" not in r:
+                r["source_tier"] = "recent"
         return result
     return []
 
@@ -649,6 +717,8 @@ async def _tier4_recent_fallback(
 
     result = await query(db, surql, params)
     if result and isinstance(result, list):
+        for r in result:
+            r["source_tier"] = "recent"
         return result
     return []
 

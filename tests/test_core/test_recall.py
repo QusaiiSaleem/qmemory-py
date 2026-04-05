@@ -392,3 +392,54 @@ async def test_fit_to_token_budget():
     # Budget of 100 tokens should fit all 3
     result = _fit_to_token_budget(memories, 100)
     assert len(result) == 3
+
+
+# ---------------------------------------------------------------------------
+# Composite ranking tests
+# ---------------------------------------------------------------------------
+
+
+async def test_composite_ranking_relevance_beats_salience(db):
+    """
+    A memory with high relevance (found via BM25) but low salience
+    should rank ABOVE a memory with high salience but no text match,
+    when a query is provided.
+    """
+    await save_memory(
+        content="Always use emoji in responses",
+        category="style",
+        salience=1.0,
+        db=db,
+    )
+
+    await save_memory(
+        content="The project budget for Q3 is 200K",
+        category="context",
+        salience=0.3,
+        db=db,
+    )
+
+    results = await recall(query_text="project budget Q3", limit=10, db=db)
+
+    assert len(results) >= 2
+    budget_idx = next(i for i, r in enumerate(results) if "budget" in r["content"])
+    emoji_idx = next(i for i, r in enumerate(results) if "emoji" in r["content"])
+    assert budget_idx < emoji_idx, "Relevant result should rank above high-salience irrelevant result"
+
+
+async def test_recall_results_have_source_tier(db):
+    """Every result from recall() should have a 'source_tier' field."""
+    await save_memory(
+        content="Testing source tier tagging",
+        category="context",
+        salience=0.5,
+        db=db,
+    )
+
+    results = await recall(query_text="source tier tagging", limit=5, db=db)
+    assert len(results) >= 1
+
+    for r in results:
+        assert "source_tier" in r, f"Result missing source_tier: {r.get('id')}"
+        assert r["source_tier"] in ("bm25", "vector", "graph", "recent", "source_type"), \
+            f"Unexpected source_tier value: {r['source_tier']}"
