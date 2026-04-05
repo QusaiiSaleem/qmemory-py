@@ -74,7 +74,8 @@ async def correct_memory(
           - "action":        What was done ("corrected", "deleted", "updated", "unlinked")
           - "memory_id":     The affected memory's record ID
           - "new_memory_id": The newly created memory ID (only for action="correct")
-          - "_nudge":        Suggested next action for the agent
+          - "actions":       Structured next-step suggestions
+          - "meta":          Operation metadata
 
     Raises:
         ValueError: If action is not one of the 4 allowed values, or if a

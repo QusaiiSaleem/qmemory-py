@@ -158,11 +158,13 @@ async def read_section(
             SELECT VALUE in FROM relates
             WHERE type = 'from_book' AND out = {table}:`{suffix}`
         """)
+        from qmemory.formatters.response import attach_meta
+
         if not mem_ids:
-            return {
-                "book_id": book_id, "section": section,
-                "chunks": [], "_nudge": "No chunks found.",
-            }
+            return attach_meta(
+                {"book_id": book_id, "section": section, "chunks": []},
+                total_chunks=0, level="chunks",
+            )
 
         id_list = ", ".join(str(mid) for mid in mem_ids)
         chunks = await query(conn, f"""

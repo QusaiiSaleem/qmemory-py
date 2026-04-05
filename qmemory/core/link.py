@@ -73,7 +73,8 @@ async def link_nodes(
           - "from_id":   The source node ID (echoed back)
           - "to_id":     The target node ID (echoed back)
           - "type":      The relationship_type (echoed back)
-          - "_nudge":    Suggestion to explore related nodes
+          - "actions":   Structured next-step suggestions
+          - "meta":      Edge counts for both endpoints
 
         Returns None if either node does not exist.
 

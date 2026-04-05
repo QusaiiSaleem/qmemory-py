@@ -15,7 +15,7 @@ Flow:
   5. Build a SurrealQL CREATE query with parameterized values
   6. Handle optional fields carefully (SurrealDB 3.0 rejects NULL for option<> fields)
   7. Execute the query
-  8. Return result with a _nudge suggesting the agent link the new memory
+  8. Return result with actions + meta
 
 Design decisions:
   - Accepts an optional `db` connection parameter. If provided (e.g. in tests),
@@ -93,7 +93,8 @@ async def save_memory(
         dict with:
           - "action": "ADD" | "UPDATE" | "NOOP"
           - "memory_id": "memory:xxx" or None (None when action is NOOP)
-          - "_nudge": suggestion for the agent to link the new memory
+          - "actions": structured next-step suggestions
+          - "meta": dedup_checked, embedding_generated, indexed
 
     Raises:
         ValueError: If category is not one of the 8 allowed categories.
