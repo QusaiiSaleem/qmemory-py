@@ -242,90 +242,71 @@ async def test_recall_with_scope_filter(db):
 
 
 async def test_assemble_context_basic(db):
-    """
-    assemble_context() should produce a formatted string containing:
-    - Agent Self-Model section (if self memories exist)
-    - Session header
-    - Memories grouped by category
-    """
+    """assemble_context() should return a dict with self_model, memories, actions, meta."""
     await save_memory(content="I prefer direct communication", category="self", salience=0.9, db=db)
     await save_memory(content="Budget is 500K", category="context", salience=0.8, db=db)
 
     context = await assemble_context(session_key="test:session:1", db=db)
 
-    # Should be a non-empty string
-    assert isinstance(context, str)
-    assert len(context) > 0
+    assert isinstance(context, dict)
+    assert "self_model" in context
+    assert "memories" in context
+    assert "actions" in context
+    assert "meta" in context
 
-    # Should contain the self-model section
-    assert "Agent Self-Model" in context
-    assert "direct communication" in context
+    # Self-model should contain the self memory
+    self_contents = [m["content"] for m in context["self_model"]]
+    assert "I prefer direct communication" in self_contents
 
-    # Should contain the context memory
-    assert "500K" in context
+    # Context memories should be in the grouped dict
+    assert "context" in context["memories"]
 
 
 async def test_assemble_context_session_header(db):
-    """
-    The session header should reflect the parsed session key.
-    """
+    """The meta should reflect the session scope."""
     await save_memory(content="Some fact", category="context", salience=0.5, db=db)
 
     context = await assemble_context(session_key="telegram:group:123:topic:7", db=db)
 
-    # Should contain session information
-    assert "Session:" in context
-    assert "telegram" in context
+    assert "meta" in context
+    assert context["meta"]["session_scope"] == "topic:7"
 
 
 async def test_assemble_context_empty_db(db):
-    """
-    Even with no memories, assemble_context should return a string
-    with at least the session header (not crash).
-    """
+    """Even with no memories, assemble_context should return a valid dict."""
     context = await assemble_context(session_key="test:session:1", db=db)
 
-    assert isinstance(context, str)
-    # Should have at least the session header
-    assert "Session:" in context
+    assert isinstance(context, dict)
+    assert "self_model" in context
+    assert "memories" in context
+    assert "meta" in context
+    assert context["meta"]["total_memories"] == 0
 
 
 async def test_assemble_context_self_memories_first(db):
-    """
-    Self-model memories should appear BEFORE other categories in the output.
-
-    This is a core design principle: the agent's self-knowledge is the most
-    important context and should be injected first.
-    """
+    """Self-model should be in its own top-level key, separate from memories."""
     await save_memory(content="Agent self-knowledge fact", category="self", salience=0.9, db=db)
     await save_memory(content="Some context fact", category="context", salience=0.8, db=db)
 
     context = await assemble_context(session_key="test:session:1", db=db)
 
-    # Find positions in the output
-    self_pos = context.find("Agent Self-Model")
-    context_pos = context.find("Context")  # The "### Context" header
-
-    # Self-model must come before context
-    assert self_pos >= 0, "Self-Model section not found"
-    assert self_pos < context_pos or context_pos == -1
+    # Self-model is separate from memories
+    assert len(context["self_model"]) >= 1
+    assert "self" not in context["memories"]  # self excluded from grouped memories
 
 
 async def test_assemble_context_multiple_categories(db):
-    """
-    Memories from different categories should be grouped under their
-    own headings in the output.
-    """
+    """Memories from different categories should be grouped by category."""
     await save_memory(content="User likes dark mode", category="preference", salience=0.7, db=db)
     await save_memory(content="Project deadline is March", category="context", salience=0.8, db=db)
     await save_memory(content="Use Slack for updates", category="decision", salience=0.6, db=db)
 
     context = await assemble_context(session_key="test:session:1", db=db)
 
-    # Each category should have its own section
-    assert "Preference" in context
-    assert "Context" in context
-    assert "Decision" in context
+    assert "preference" in context["memories"]
+    assert "context" in context["memories"]
+    assert "decision" in context["memories"]
+    assert "categories" in context["meta"]
 
 
 # ---------------------------------------------------------------------------

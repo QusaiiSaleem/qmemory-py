@@ -92,7 +92,7 @@ async def qmemory_bootstrap(session_key: str = "default") -> str:
 
     elapsed = time.monotonic() - start
     logger.info("qmemory_bootstrap completed in %.2fs", elapsed)
-    return result
+    return json.dumps(result, default=str, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

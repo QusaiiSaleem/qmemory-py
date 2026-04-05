@@ -862,26 +862,12 @@ async def assemble_context(
     session_key: str,
     owner_id: str | None = None,
     db: Any = None,
-) -> str:
+) -> dict:
     """
-    Build the full context block that gets injected into the AI agent's prompt.
+    Build the full context block for AI agents as structured JSON.
 
-    This is the main "read" function that qmemory_bootstrap calls. It:
-    1. Parses the session key to determine channel, topic, and scope
-    2. Loads self-model memories (agent's self-knowledge) — injected FIRST
-    3. Loads all other memories, sorted by salience
-    4. Formats everything into a structured text block
-
-    The resulting string is injected as a systemPromptAddition so the agent
-    "remembers" facts from previous sessions.
-
-    Args:
-        session_key: The current session key (e.g. "telegram:group:123:topic:7").
-        db:          Optional SurrealDB connection. If None, creates a fresh one.
-
-    Returns:
-        A formatted string ready for injection into the agent's system prompt.
-        Returns a minimal header if no memories exist.
+    Returns a dict with self_model, memories (grouped by category),
+    actions, and meta (total counts, category breakdown, session scope).
     """
     if db is not None:
         return await _assemble(session_key, owner_id, db)
@@ -890,28 +876,23 @@ async def assemble_context(
             return await _assemble(session_key, owner_id, conn)
 
 
-async def _assemble(session_key: str, owner_id: str | None, db: Any) -> str:
-    """
-    Internal assembly logic — called with an active DB connection.
-    """
-    # --- Step 1: Parse session key ---
+async def _assemble(session_key: str, owner_id: str | None, db: Any) -> dict:
+    """Internal assembly logic — returns structured dict."""
+    from qmemory.formatters.response import attach_meta
+
     parsed = parse_session_key(session_key)
     scope = parsed["scope"]
 
-    # --- Step 2: Load self-model memories (injected FIRST) ---
-    # Self-knowledge is the agent's "soul" — what it knows about itself,
-    # its communication patterns, what works and what to avoid.
+    # Load self-model memories
     self_memories = await _tier3_category_filter(
         categories=["self"],
-        scope=None,  # Self-knowledge is always global
+        scope=None,
         min_salience=0,
         limit=10,
         db=db,
     )
 
-    # --- Step 3: Load all other memories for the current scope ---
-    # We recall both scope-specific AND global memories.
-    # High-salience memories (critical rules, preferences) are always included.
+    # Load all other memories
     logger.debug("Assembling context for session=%s owner=%s", session_key, owner_id)
     memories = await recall(
         scope=scope if scope != "global" else None,
@@ -920,44 +901,46 @@ async def _assemble(session_key: str, owner_id: str | None, db: Any) -> str:
         db=db,
     )
 
-    # Remove self memories from the general list to avoid duplication
-    # (they're already in self_memories and will be formatted separately)
     self_ids = {str(m.get("id", "")) for m in self_memories}
     other_memories = [m for m in memories if str(m.get("id", "")) not in self_ids]
 
-    # --- Step 4: Format everything ---
-    lines: list[str] = []
-
-    # Part 1: Self-model (injected FIRST — most important)
-    if self_memories:
-        lines.append("## Agent Self-Model")
-        for m in self_memories:
-            lines.append(f"- {m.get('content', '')}")
-
-    # Part 2: Session header
-    channel_label = parsed["channel"] or "direct"
-    topic_label = f"/topic:{parsed['topic_id']}" if parsed.get("topic_id") else ""
-    scope_label = f" | scope: {scope}" if scope != "global" else ""
-    mem_count = len(self_memories) + len(other_memories)
-    lines.append(f"\n## Session: {channel_label}/{parsed['chat_type']}{topic_label}{scope_label} | {mem_count} memories recalled")
-
-    # Part 3: Memories grouped by category
-    for cat in MEMORY_CATEGORIES:
-        # Skip "self" — already formatted above
+    # Group by category
+    grouped: dict[str, list] = {}
+    for m in other_memories:
+        cat = m.get("category", "context")
         if cat == "self":
             continue
+        if cat not in grouped:
+            grouped[cat] = []
+        grouped[cat].append({
+            "id": str(m.get("id", "")),
+            "content": m.get("content", ""),
+            "salience": m.get("salience", 0),
+            "age": _format_age(m.get("created_at")),
+        })
 
-        # Filter memories for this category
-        cat_mems = [m for m in other_memories if m.get("category") == cat]
+    # Count categories
+    cat_counts: dict[str, int] = {}
+    for m in self_memories:
+        cat_counts["self"] = cat_counts.get("self", 0) + 1
+    for m in other_memories:
+        cat = m.get("category", "context")
+        cat_counts[cat] = cat_counts.get(cat, 0) + 1
 
-        if cat_mems:
-            lines.append(f"\n### {cat.title()}")
-            for m in cat_mems:
-                # Format each memory with its ID, scope, age, and content
-                mem_id = m.get("id", "???")
-                mem_scope = m.get("scope", "global")
-                age = _format_age(m.get("created_at"))
-                content = m.get("content", "")
-                lines.append(f"- [{mem_id}] [{mem_scope}] ({age}) {content}")
+    total = len(self_memories) + len(other_memories)
 
-    return "\n".join(lines)
+    response = {
+        "self_model": [
+            {"id": str(m.get("id", "")), "content": m.get("content", "")}
+            for m in self_memories
+        ],
+        "memories": grouped,
+    }
+
+    return attach_meta(
+        response,
+        actions_context={"type": "bootstrap", "total_memories": total},
+        total_memories=total,
+        categories=cat_counts,
+        session_scope=scope,
+    )

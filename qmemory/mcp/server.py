@@ -72,8 +72,8 @@ async def qmemory_bootstrap(session_key: str = "default") -> str:
     """
     from qmemory.core.recall import assemble_context
 
-    # assemble_context returns a formatted string ready for injection
-    return await assemble_context(session_key)
+    result = await assemble_context(session_key)
+    return json.dumps(result, default=str, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
