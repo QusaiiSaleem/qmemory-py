@@ -443,3 +443,69 @@ async def test_recall_results_have_source_tier(db):
         assert "source_tier" in r, f"Result missing source_tier: {r.get('id')}"
         assert r["source_tier"] in ("bm25", "vector", "graph", "recent", "source_type"), \
             f"Unexpected source_tier value: {r['source_tier']}"
+
+
+# ---------------------------------------------------------------------------
+# Hard category filter tests
+# ---------------------------------------------------------------------------
+
+
+async def test_hard_category_filter(db):
+    """When category is set, ONLY that category should appear in results."""
+    await save_memory(content="I prefer dark mode", category="preference", salience=0.9, db=db)
+    await save_memory(content="The project deadline is March", category="context", salience=0.9, db=db)
+    await save_memory(content="Use bullet points", category="style", salience=0.9, db=db)
+
+    results = await recall(categories=["context"], limit=10, db=db)
+
+    categories_found = {r["category"] for r in results}
+    assert categories_found == {"context"}, f"Expected only 'context', got: {categories_found}"
+
+
+# ---------------------------------------------------------------------------
+# Date filtering tests
+# ---------------------------------------------------------------------------
+
+
+async def test_recall_after_filter(db):
+    """The 'after' parameter should exclude memories created before that date."""
+    # Save a memory, then backdate it
+    result = await save_memory(content="Old memory from January", category="context", db=db)
+    old_id = result["memory_id"]
+    old_suffix = old_id.split(":", 1)[1]
+    await query(db, f"UPDATE memory:`{old_suffix}` SET created_at = <datetime>'2026-01-01T00:00:00Z'")
+
+    # Save a recent memory
+    await save_memory(content="Recent memory from today", category="context", db=db)
+
+    results = await recall(after="2026-04-01", limit=10, db=db)
+
+    contents = [r["content"] for r in results]
+    assert "Recent memory from today" in contents
+    assert "Old memory from January" not in contents
+
+
+# ---------------------------------------------------------------------------
+# Offset pagination tests
+# ---------------------------------------------------------------------------
+
+
+async def test_recall_offset_pagination(db):
+    """Offset should skip the first N results."""
+    for i in range(5):
+        await save_memory(
+            content=f"Memory number {i}",
+            category="context",
+            salience=0.5 + (i * 0.05),
+            db=db,
+        )
+
+    page1 = await recall(limit=2, offset=0, db=db)
+    page2 = await recall(limit=2, offset=2, db=db)
+
+    page1_ids = {str(r["id"]) for r in page1}
+    page2_ids = {str(r["id"]) for r in page2}
+
+    assert page1_ids.isdisjoint(page2_ids), "Page 1 and Page 2 should have different results"
+    assert len(page1) == 2
+    assert len(page2) == 2

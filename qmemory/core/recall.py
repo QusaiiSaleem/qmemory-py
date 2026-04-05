@@ -207,18 +207,20 @@ async def recall(
     scope: str | None = None,
     categories: list[str] | None = None,
     limit: int = 20,
+    offset: int = 0,
     min_salience: float | None = None,
     token_budget: int | None = None,
     owner_id: str | None = None,
     source_type: str | None = None,
+    after: str | None = None,
+    before: str | None = None,
     db: Any = None,
 ) -> list[dict]:
     """
     Run the 4-tier recall pipeline to find the most relevant memories.
 
     Each tier tries a different strategy. Results from all tiers are merged,
-    deduplicated by ID, sorted by salience (most important first), and
-    trimmed to the requested limit.
+    deduplicated by ID, sorted by composite score, and trimmed to limit.
 
     Args:
         query_text:    Free-text search query. Used by Tier 1 (graph) and
@@ -226,46 +228,35 @@ async def recall(
         scope:         Filter memories to this scope (e.g. "global",
                        "topic:7"). If None, searches all scopes.
         categories:    Filter to specific categories (e.g. ["context", "self"]).
-                       Used by Tier 3 (category filter).
+                       When set, acts as a HARD filter on ALL tiers.
         limit:         Maximum number of memories to return. Default 20.
-        min_salience:  Minimum salience threshold. Memories below this are
-                       excluded from Tier 3 (category) and Tier 4 (recent).
-        token_budget:  If set, trim results to fit within this many tokens
-                       (estimated at ~4 chars per token).
+        offset:        Skip first N results (for pagination). Default 0.
+        min_salience:  Minimum salience threshold.
+        token_budget:  If set, trim results to fit within this many tokens.
         source_type:   Filter to memories linked via a specific relation type.
-                       E.g. "from_book" returns only memories extracted from books.
-                       Uses the `relates.type` field on edges pointing TO the memory.
-        db:            Optional SurrealDB connection. If None, creates a
-                       fresh one via get_db().
+        after:         ISO date string — only return memories created after this.
+        before:        ISO date string — only return memories created before this.
+        db:            Optional SurrealDB connection.
 
     Returns:
-        List of memory dicts, sorted by salience DESC, deduplicated by ID.
-        Each dict has at minimum: id, content, category, salience, scope.
+        List of memory dicts, sorted by composite score, deduplicated by ID.
     """
-    # We'll collect results from all tiers into this list
     collected: list[dict] = []
-
-    # The target count controls when we skip later tiers.
-    # If we already have 1.5x the requested limit, skip the next tier.
     target_count = limit
 
     if db is not None:
-        # Test mode: use the provided connection directly
         collected = await _run_tiers(
             query_text, scope, categories, limit, min_salience,
-            target_count, source_type, db,
+            target_count, source_type, after, before, db,
         )
     else:
-        # Production mode: create a fresh connection for this operation
         async with get_db() as conn:
             collected = await _run_tiers(
                 query_text, scope, categories, limit, min_salience,
-                target_count, source_type, conn,
+                target_count, source_type, after, before, conn,
             )
 
     # --- Merge: deduplicate by ID ---
-    # Multiple tiers may find the same memory. Keep only the first
-    # occurrence (which comes from the higher-priority tier).
     deduped = _deduplicate_by_id(collected)
     logger.debug("Recall merged: %d unique memories from %d total", len(deduped), len(collected))
 
@@ -276,14 +267,12 @@ async def recall(
     deduped.sort(key=lambda m: m["_score"], reverse=True)
 
     # --- Apply token budget if provided ---
-    # Roughly estimate tokens at ~4 characters per token.
-    # Trim from the bottom (lowest salience) until we fit.
     if token_budget and token_budget > 0:
         deduped = _fit_to_token_budget(deduped, token_budget)
         logger.debug("Recall: %d memories fit in %d token budget", len(deduped), token_budget)
 
-    # --- Trim to the requested limit ---
-    return deduped[:limit]
+    # --- Apply offset for pagination, then trim to limit ---
+    return deduped[offset:offset + limit]
 
 
 # ---------------------------------------------------------------------------
@@ -299,65 +288,67 @@ async def _run_tiers(
     min_salience: float | None,
     target_count: int,
     source_type: str | None,
+    after: str | None,
+    before: str | None,
     db: Any,
 ) -> list[dict]:
     """
     Execute the 4-tier cascade against a single DB connection.
 
     Each tier only runs if previous tiers haven't collected enough results.
-    This saves unnecessary database round-trips.
-
-    When source_type is set (e.g. "from_book"), a dedicated query runs FIRST
-    to find memories linked via that relation type. The normal tiers still
-    run afterward to fill remaining slots (text search within those results).
+    Shared filter clauses (category, after, before) are applied to ALL tiers.
     """
     collected: list[dict] = []
 
-    # --- Tier 0: Source-type filter (e.g. "from_book") ---
-    # When set, find memories that are the TARGET of a relates edge
-    # with the given type. Example: entity:rework →[from_book]→ memory:xyz
+    # Build shared filter clauses applied to ALL tiers
+    extra_clauses = ""
+    extra_params: dict[str, Any] = {}
+
+    if categories:
+        extra_clauses += " AND category IN $cats"
+        extra_params["cats"] = categories
+
+    if after:
+        extra_clauses += " AND created_at >= <datetime>$after_dt"
+        extra_params["after_dt"] = after
+
+    if before:
+        extra_clauses += " AND created_at <= <datetime>$before_dt"
+        extra_params["before_dt"] = before
+
+    # --- Tier 0: Source-type filter ---
     if source_type:
-        tier0 = await _tier0_source_type(source_type, query_text, scope, limit, db)
+        tier0 = await _tier0_source_type(source_type, query_text, scope, limit, db, extra_clauses, extra_params)
         collected.extend(tier0)
         logger.debug("Recall tier 0 (source_type=%s): %d memories", source_type, len(tier0))
-        # If source_type is set and we got enough, skip normal tiers
         if len(collected) >= target_count:
             return collected
 
     # --- Tier 1: Graph-linked memories ---
-    # Find memories connected via `relates` edges to entities mentioned
-    # in the query text. Only runs if query is long enough to extract
-    # meaningful entity names from it.
     if query_text and len(query_text) >= MIN_QUERY_LENGTH_FOR_GRAPH:
-        tier1 = await _tier1_graph_linked(query_text, scope, db)
+        tier1 = await _tier1_graph_linked(query_text, scope, db, extra_clauses, extra_params)
         collected.extend(tier1)
         logger.debug("Recall tier 1 (graph): %d memories", len(tier1))
     else:
         logger.debug("Recall tier 1 (graph): skipped — no query or too short")
 
     # --- Tier 2: BM25 + Vector search ---
-    # Full-text search and semantic vector search combined.
-    # Skip if Tier 1 already found plenty of results.
     if query_text and len(collected) < target_count * 1.5:
-        tier2 = await _tier2_search(query_text, scope, limit, db)
+        tier2 = await _tier2_search(query_text, scope, limit, db, extra_clauses, extra_params)
         collected.extend(tier2)
         logger.debug("Recall tier 2 (BM25+vector): %d memories", len(tier2))
 
     # --- Tier 3: Category filter ---
-    # If the caller specified categories, fetch memories matching those
-    # categories sorted by salience. Skip if we already have enough.
     if categories and len(categories) > 0 and len(collected) < target_count * 1.5:
         tier3 = await _tier3_category_filter(
-            categories, scope, min_salience or 0, limit, db,
+            categories, scope, min_salience or 0, limit, db, extra_clauses, extra_params,
         )
         collected.extend(tier3)
         logger.debug("Recall tier 3 (category): %d memories", len(tier3))
 
     # --- Tier 4: Recent fallback ---
-    # If previous tiers didn't find enough, grab the most recent memories.
-    # This ensures the agent always has SOMETHING to work with.
     if len(collected) < target_count:
-        tier4 = await _tier4_recent_fallback(scope, db)
+        tier4 = await _tier4_recent_fallback(scope, db, extra_clauses, extra_params)
         collected.extend(tier4)
         logger.debug("Recall tier 4 (recent): %d memories", len(tier4))
 
@@ -375,6 +366,8 @@ async def _tier0_source_type(
     scope: str | None,
     limit: int,
     db: Any,
+    extra_clauses: str = "",
+    extra_params: dict | None = None,
 ) -> list[dict]:
     """
     Find memories that are targets of a specific relation type.
@@ -386,6 +379,8 @@ async def _tier0_source_type(
     BM25 full-text match on the memory content.
     """
     params: dict[str, Any] = {"rel_type": source_type, "limit": limit}
+    if extra_params:
+        params.update(extra_params)
 
     # Optional text filter — narrows results within the source type
     text_clause = ""
@@ -425,6 +420,7 @@ async def _tier0_source_type(
         AND (valid_until IS NONE OR valid_until > time::now())
         {text_clause}
         {scope_clause}
+        {extra_clauses}
     ORDER BY salience DESC
     LIMIT $limit;
     """
@@ -446,6 +442,8 @@ async def _tier1_graph_linked(
     query_text: str,
     scope: str | None,
     db: Any,
+    extra_clauses: str = "",
+    extra_params: dict | None = None,
 ) -> list[dict]:
     """
     Find memories linked via graph edges to entities matching the query.
@@ -480,6 +478,8 @@ async def _tier1_graph_linked(
     # We use parameterized queries with indexed params ($w0, $w1, etc.)
     match_conditions = []
     params: dict[str, Any] = {}
+    if extra_params:
+        params.update(extra_params)
     for i, word in enumerate(cleaned_words):
         match_conditions.append(
             f"string::contains(string::lowercase(name), string::lowercase($w{i}))"
@@ -505,6 +505,7 @@ async def _tier1_graph_linked(
     WHERE is_active = true
         AND (valid_until IS NONE OR valid_until > time::now())
         {scope_filter}
+        {extra_clauses}
         AND id IN (
             SELECT VALUE <-relates<-.id FROM $entities
             WHERE <-relates<-.id IS NOT NONE
@@ -548,6 +549,8 @@ async def _tier2_search(
     scope: str | None,
     limit: int,
     db: Any,
+    extra_clauses: str = "",
+    extra_params: dict | None = None,
 ) -> list[dict]:
     """
     Combined BM25 full-text search and vector similarity search.
@@ -565,19 +568,20 @@ async def _tier2_search(
     # Build scope filter clause
     scope_clause = ""
     params: dict[str, Any] = {"query": query_text, "limit": limit}
+    if extra_params:
+        params.update(extra_params)
     if scope and scope != "any":
         scope_clause = 'AND ($scope = "any" OR scope = $scope OR scope = "global")'
         params["scope"] = scope
 
     # --- BM25 full-text search ---
-    # Uses SurrealDB's @@ operator for full-text matching.
-    # Falls back to salience ordering since search::score() is broken in v3.
     bm25_surql = f"""
     SELECT {MEMORY_FIELDS} FROM memory
     WHERE content @@ $query
         AND is_active = true
         {scope_clause}
         AND (valid_until IS NONE OR valid_until > time::now())
+        {extra_clauses}
     ORDER BY salience DESC
     LIMIT $limit;
     """
@@ -604,6 +608,8 @@ async def _tier2_search(
                 "query_vec": query_vec,
                 "limit": limit,
             }
+            if extra_params:
+                vec_params.update(extra_params)
             vec_scope_clause = ""
             if scope and scope != "any":
                 vec_scope_clause = 'AND ($scope = "any" OR scope = $scope OR scope = "global")'
@@ -616,6 +622,7 @@ async def _tier2_search(
                 AND embedding IS NOT NONE
                 {vec_scope_clause}
                 AND (valid_until IS NONE OR valid_until > time::now())
+                {extra_clauses}
             ORDER BY vec_score DESC
             LIMIT $limit;
             """
@@ -644,6 +651,8 @@ async def _tier3_category_filter(
     min_salience: float,
     limit: int,
     db: Any,
+    extra_clauses: str = "",
+    extra_params: dict | None = None,
 ) -> list[dict]:
     """
     Fetch memories matching specific categories, sorted by salience.
@@ -657,6 +666,8 @@ async def _tier3_category_filter(
         "min_salience": min_salience,
         "limit": limit,
     }
+    if extra_params:
+        params.update(extra_params)
 
     scope_clause = ""
     if scope and scope != "any":
@@ -670,6 +681,7 @@ async def _tier3_category_filter(
         AND salience >= $min_salience
         {scope_clause}
         AND (valid_until IS NONE OR valid_until > time::now())
+        {extra_clauses}
     ORDER BY salience DESC
     LIMIT $limit;
     """
@@ -691,6 +703,8 @@ async def _tier3_category_filter(
 async def _tier4_recent_fallback(
     scope: str | None,
     db: Any,
+    extra_clauses: str = "",
+    extra_params: dict | None = None,
 ) -> list[dict]:
     """
     Get the most recently created active memories as a safety net.
@@ -700,6 +714,8 @@ async def _tier4_recent_fallback(
     the query doesn't match anything specific.
     """
     params: dict[str, Any] = {"limit": RECENT_FALLBACK_LIMIT}
+    if extra_params:
+        params.update(extra_params)
 
     scope_clause = ""
     if scope and scope != "any":
@@ -711,6 +727,7 @@ async def _tier4_recent_fallback(
     WHERE is_active = true
         {scope_clause}
         AND (valid_until IS NONE OR valid_until > time::now())
+        {extra_clauses}
     ORDER BY created_at DESC
     LIMIT $limit;
     """
