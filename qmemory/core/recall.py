@@ -598,44 +598,47 @@ async def _tier2_search(
         results.extend(bm25_results)
         logger.debug("Tier 2 BM25: %d results", len(bm25_results))
 
-    # --- Vector similarity search ---
-    # Only runs if we can generate a query embedding (Voyage API key configured).
-    # This finds semantically similar memories even when exact words don't match.
-    try:
-        query_vec = await generate_query_embedding(query_text)
-        if query_vec:
-            vec_params: dict[str, Any] = {
-                "query_vec": query_vec,
-                "limit": limit,
-            }
-            if extra_params:
-                vec_params.update(extra_params)
-            vec_scope_clause = ""
-            if scope and scope != "any":
-                vec_scope_clause = 'AND ($scope = "any" OR scope = $scope OR scope = "global")'
-                vec_params["scope"] = scope
+    # --- Vector similarity search (optional reranker) ---
+    # Only runs when BM25 found fewer than 5 results.
+    # Saves ~90% of Voyage API calls while keeping a safety net for vague queries.
+    if len(results) < 5:
+        try:
+            query_vec = await generate_query_embedding(query_text)
+            if query_vec:
+                vec_params: dict[str, Any] = {
+                    "query_vec": query_vec,
+                    "limit": limit,
+                }
+                if extra_params:
+                    vec_params.update(extra_params)
+                vec_scope_clause = ""
+                if scope and scope != "any":
+                    vec_scope_clause = 'AND ($scope = "any" OR scope = $scope OR scope = "global")'
+                    vec_params["scope"] = scope
 
-            vec_surql = f"""
-            SELECT {MEMORY_FIELDS}, vector::similarity::cosine(embedding, $query_vec) AS vec_score
-            FROM memory
-            WHERE is_active = true
-                AND embedding IS NOT NONE
-                {vec_scope_clause}
-                AND (valid_until IS NONE OR valid_until > time::now())
-                {extra_clauses}
-            ORDER BY vec_score DESC
-            LIMIT $limit;
-            """
+                vec_surql = f"""
+                SELECT {MEMORY_FIELDS}, vector::similarity::cosine(embedding, $query_vec) AS vec_score
+                FROM memory
+                WHERE is_active = true
+                    AND embedding IS NOT NONE
+                    {vec_scope_clause}
+                    AND (valid_until IS NONE OR valid_until > time::now())
+                    {extra_clauses}
+                ORDER BY vec_score DESC
+                LIMIT $limit;
+                """
 
-            vec_results = await query(db, vec_surql, vec_params)
-            if vec_results and isinstance(vec_results, list):
-                for r in vec_results:
-                    r["source_tier"] = "vector"
-                results.extend(vec_results)
-                logger.debug("Tier 2 vector: %d results", len(vec_results))
-    except Exception as e:
-        # Vector search is non-fatal — BM25 results are enough
-        logger.debug("Vector search failed (non-fatal): %s", e)
+                vec_results = await query(db, vec_surql, vec_params)
+                if vec_results and isinstance(vec_results, list):
+                    for r in vec_results:
+                        r["source_tier"] = "vector"
+                    results.extend(vec_results)
+                    logger.debug("Tier 2 vector (rerank): %d results", len(vec_results))
+        except Exception as e:
+            # Vector search is non-fatal — BM25 results are enough
+            logger.debug("Vector search failed (non-fatal): %s", e)
+    else:
+        logger.debug("Tier 2 vector: skipped — BM25 returned %d results (>= 5)", len(results))
 
     return results
 
