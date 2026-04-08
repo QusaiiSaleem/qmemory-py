@@ -154,10 +154,15 @@ async def check_stale(db: Any = None) -> list[dict]:
     Returns list of findings with severity=info and fixed=True.
     """
     async def _run(conn: Any) -> list[dict]:
+        # IMPORTANT: SurrealDB v3 treats NONE < time::now() as TRUE,
+        # so we must explicitly check valid_until IS NOT NONE before comparing.
         stale = await query(conn, """
             SELECT id, content, salience, valid_until FROM memory
             WHERE is_active = true
-            AND (valid_until < time::now() OR salience < 0.1)
+            AND (
+                (valid_until IS NOT NONE AND valid_until < time::now())
+                OR salience < 0.1
+            )
         """)
 
         if not stale:
