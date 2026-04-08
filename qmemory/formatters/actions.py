@@ -139,3 +139,69 @@ def build_actions(context: dict) -> list[dict]:
             })
 
     return actions
+
+
+# ---------------------------------------------------------------------------
+# Per-result action builders (used by the new search engine)
+# ---------------------------------------------------------------------------
+
+
+def build_memory_actions(memory_id: str) -> dict:
+    """Build per-result actions for a single memory."""
+    return {
+        "correct": {
+            "tool": "qmemory_correct",
+            "args": {"memory_id": memory_id},
+        },
+        "link": {
+            "tool": "qmemory_link",
+            "args": {"from_id": memory_id},
+        },
+        "get_neighbors": {
+            "tool": "qmemory_get",
+            "args": {"ids": [memory_id], "include_neighbors": True},
+        },
+    }
+
+
+def build_entity_actions(entity_id: str) -> dict:
+    """Build per-result actions for a matched entity."""
+    return {
+        "get": {
+            "tool": "qmemory_get",
+            "args": {"ids": [entity_id], "include_neighbors": True},
+        },
+        "search_within": {
+            "tool": "qmemory_search",
+            "args": {"entity_id": entity_id},
+        },
+    }
+
+
+def build_book_insight_actions(book_id: str, section: str | None = None) -> dict:
+    """Build actions for a book insight result."""
+    actions: dict = {
+        "browse_book": {
+            "tool": "qmemory_books",
+            "args": {"book_id": book_id},
+        },
+    }
+    if section:
+        actions["read_section"] = {
+            "tool": "qmemory_books",
+            "args": {"book_id": book_id, "section": section},
+        }
+    return actions
+
+
+def build_category_drill_down(query: str, by_category: dict[str, int]) -> list[dict]:
+    """Build drill-down actions for categories with multiple results."""
+    actions = []
+    for cat, count in sorted(by_category.items(), key=lambda x: x[1], reverse=True):
+        if count > 1:
+            actions.append({
+                "tool": "qmemory_search",
+                "args": {"query": query, "category": cat},
+                "reason": f"{count} {cat} memories found",
+            })
+    return actions
