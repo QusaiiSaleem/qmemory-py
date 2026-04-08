@@ -2,7 +2,7 @@
 Qmemory Cloud — FastAPI + FastMCP HTTP Server
 
 This is the HTTP entry point for Qmemory Cloud. It creates:
-  1. A FastMCP server with the same 7 tools as qmemory/mcp/server.py
+  1. A FastMCP server with the same 10 tools as qmemory/mcp/server.py
   2. A FastAPI app with auth pages (login, signup, logout)
   3. Session-based auth using signed cookies (SessionMiddleware)
   4. Mounts the FastMCP server at /mcp/ inside the FastAPI app
@@ -531,6 +531,51 @@ async def qmemory_books(
 
     elapsed = time.monotonic() - start
     logger.info("qmemory_books completed in %.2fs", elapsed)
+    return json.dumps(result, default=str, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 10: qmemory_health (read-only)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def qmemory_health(
+    check: str = "all",
+) -> str:
+    """Check the health of your memory graph.
+
+    Returns the latest health report from the background worker.
+    Shows orphan nodes, stale facts, missing links, data quality issues,
+    and coverage gaps — with suggested actions for each finding.
+
+    Args:
+        check: Which check to show. Options:
+               all            — everything (default)
+               orphans        — nodes with zero connections
+               contradictions — conflicting memories
+               stale          — expired or decayed memories
+               missing_links  — links created by the linker
+               gaps           — categories with few memories
+               quality        — broken edges, empty content
+
+    Returns JSON with summary counts, detailed findings, and actions.
+    """
+    start = time.monotonic()
+    logger.info("Tool call: qmemory_health(check=%s)", check)
+
+    from qmemory.core.health import get_latest_report
+
+    result = await get_latest_report(check=check)
+
+    elapsed = time.monotonic() - start
+    logger.info("qmemory_health completed in %.2fs", elapsed)
+
+    if result is None:
+        return json.dumps({
+            "status": "no_report",
+            "message": "No health report found. Run 'qmemory worker --once' to generate one.",
+        }, ensure_ascii=False)
     return json.dumps(result, default=str, ensure_ascii=False)
 
 

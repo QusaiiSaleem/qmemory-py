@@ -202,3 +202,21 @@ DEFINE FIELD IF NOT EXISTS created_at     ON metrics TYPE datetime DEFAULT time:
 
 DEFINE INDEX IF NOT EXISTS idx_metrics_session ON metrics FIELDS session;
 DEFINE INDEX IF NOT EXISTS idx_metrics_type ON metrics FIELDS event_type;
+
+-- ============================================================
+-- NODE: health_report (worker health check results)
+-- ============================================================
+
+DEFINE TABLE IF NOT EXISTS health_report SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS created_at           ON health_report TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS orphans_found        ON health_report TYPE int      DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS contradictions_found ON health_report TYPE int      DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS stale_found          ON health_report TYPE int      DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS links_created        ON health_report TYPE int      DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS dupes_merged         ON health_report TYPE int      DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS gaps                 ON health_report TYPE array    DEFAULT [];
+DEFINE FIELD IF NOT EXISTS quality_issues       ON health_report TYPE int      DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS findings             ON health_report TYPE any    DEFAULT [];
+DEFINE FIELD IF NOT EXISTS duration_ms          ON health_report TYPE int      DEFAULT 0;
+
+DEFINE INDEX IF NOT EXISTS idx_health_report_created ON health_report FIELDS created_at;

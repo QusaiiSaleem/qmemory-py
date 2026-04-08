@@ -90,6 +90,7 @@ async def _status():
         "relates",
         "scratchpad",
         "metrics",
+        "health_report",
     ]
 
     click.echo("")
@@ -141,8 +142,20 @@ async def _schema():
 
 
 @main.command()
-def worker():
-    """Run the background worker (linker, reflector, salience decay)."""
+@click.option(
+    "--interval",
+    default=86400,
+    show_default=True,
+    help="Seconds between cycles (default: once per day).",
+)
+@click.option(
+    "--once",
+    is_flag=True,
+    default=False,
+    help="Run one cycle and exit (for testing/cron).",
+)
+def worker(interval, once):
+    """Run the background worker (linker, dedup, linter, reflector, decay)."""
     import logging
 
     logging.basicConfig(
@@ -152,7 +165,7 @@ def worker():
     from qmemory.worker import run_worker
 
     try:
-        asyncio.run(run_worker())
+        asyncio.run(run_worker(interval=interval, once=once))
     except KeyboardInterrupt:
         click.echo("Worker stopped.")
 

@@ -1,13 +1,23 @@
 """
-Qmemory Background Worker — runs linker, reflector, and salience decay.
+Qmemory Background Worker — maintains graph health automatically.
 
-Self-scheduling: runs frequently when there's work, backs off when idle.
-Token-budgeted: won't exceed hourly LLM token limits.
-Pausable: stops processing if ~/.qmemory/worker-paused file exists.
+Runs 5 jobs per cycle:
+  1. Linker     — finds and creates edges between unlinked memories
+  2. Dedup      — finds and merges duplicate memories
+  3. Decay      — fades old memories' salience scores
+  4. Reflector  — finds patterns, contradictions, ghost entities
+  5. Linter     — 6 health checks (orphans, stale, gaps, quality)
+
+After all jobs, saves a health report to the database.
+
+Default: runs once per day (86400s). Use --once for single run.
+Pausable: touch ~/.qmemory/worker-paused to pause.
+Token-budgeted: respects hourly LLM token limits.
 
 Usage:
-    python -m qmemory.worker        # direct
-    qmemory worker                  # via CLI
+    qmemory worker                  # once per day
+    qmemory worker --interval 3600  # every hour
+    qmemory worker --once           # run once and exit
 """
 from __future__ import annotations
 
@@ -18,33 +28,25 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# --- Worker configuration ---
 # Where to look for the "pause" signal file.
 # If this file exists, the worker sleeps instead of running cycles.
 PAUSE_FILE = Path.home() / ".qmemory" / "worker-paused"
 
-# How long to wait between cycles (in seconds).
-# When work is found, we check again sooner (5 min).
-# When idle, we back off to save resources (30 min).
-ACTIVE_INTERVAL = 300      # 5 min when work found
-IDLE_INTERVAL = 1800       # 30 min when no work
+# Default interval between cycles: once per day (86400 seconds).
+DEFAULT_INTERVAL = 86400
 
-# The reflector is more expensive than the linker, so we stagger it.
+# The reflector is more expensive than other jobs, so we stagger it.
 # It only runs every Nth cycle (e.g. every 2nd cycle).
-REFLECTOR_EVERY_N = 2      # Run reflector every Nth cycle
+REFLECTOR_EVERY_N = 2
 
 
-async def run_worker():
+async def run_worker(interval: int = DEFAULT_INTERVAL, once: bool = False):
     """
-    Main worker loop — self-scheduling, token-budgeted, pausable.
+    Main worker loop — runs all maintenance jobs, saves health report.
 
-    This runs forever (until Ctrl+C). Each cycle:
-      1. Check if paused (via PAUSE_FILE)
-      2. Run the linker (finds relationships between memories)
-      3. Run salience decay (fades old memories — zero LLM cost)
-      4. Every Nth cycle, run the reflector (finds patterns/contradictions)
-      5. Sleep for ACTIVE_INTERVAL (5 min) if work was found,
-         or IDLE_INTERVAL (30 min) if idle
+    Args:
+        interval: Seconds between cycles. Default: 86400 (once per day).
+        once:     If True, run one cycle and exit (for testing/cron).
     """
     from qmemory.core.token_budget import init_token_budget
 
@@ -54,9 +56,9 @@ async def run_worker():
     cycle = 0
 
     logger.info(
-        "worker.started active_interval=%ds idle_interval=%ds",
-        ACTIVE_INTERVAL,
-        IDLE_INTERVAL,
+        "worker.started interval=%ds once=%s",
+        interval,
+        once,
     )
 
     while True:
@@ -66,59 +68,129 @@ async def run_worker():
         # To resume: rm ~/.qmemory/worker-paused
         if PAUSE_FILE.exists():
             logger.debug("worker.paused file=%s", PAUSE_FILE)
+            if once:
+                logger.info("worker.paused and --once set, exiting")
+                return
             await asyncio.sleep(60)
             continue
 
         cycle += 1
         cycle_start = time.monotonic()
-        found_work = False
+
+        # Accumulators for the health report
+        all_findings: list[dict] = []
+        links_created = 0
+        dupes_merged = 0
+        contradictions_found = 0
 
         try:
-            # --- 1. Linker (every cycle) ---
+            # --- Job 1: Linker (every cycle) ---
             # Finds relationships between unlinked memories using a cheap LLM.
-            # Returns {"found_work": True/False, "processed": N, "edges_created": N}
             from qmemory.core.linker import run_linker_cycle
 
             linker_result = await run_linker_cycle()
-            if linker_result.get("found_work"):
-                found_work = True
+            links_created = linker_result.get("edges_created", 0)
             logger.info("worker.linker cycle=%d result=%s", cycle, linker_result)
 
-            # --- 2. Decay (piggybacks on linker, zero LLM cost) ---
+            # --- Job 2: Dedup (every cycle) ---
+            # Finds and merges duplicate memories missed by save-time dedup.
+            from qmemory.core.dedup_worker import run_dedup_cycle
+
+            dedup_result = await run_dedup_cycle()
+            dupes_merged = dedup_result.get("dupes_merged", 0)
+            logger.info("worker.dedup cycle=%d result=%s", cycle, dedup_result)
+
+            # --- Job 3: Decay (every cycle, zero LLM cost) ---
             # Fades old memories' salience scores. Pure DB operation.
-            # Returns {"tier1_decayed": N, "tier2_decayed": N, "tier3_enforced": N}
             from qmemory.core.decay import run_salience_decay
 
             decay_result = await run_salience_decay()
             logger.info("worker.decay cycle=%d result=%s", cycle, decay_result)
 
-            # --- 3. Reflector (staggered — every other cycle) ---
+            # --- Job 4: Reflector (staggered — every other cycle) ---
             # More expensive: finds patterns, contradictions, compressions.
-            # Only runs every REFLECTOR_EVERY_N cycles to save tokens.
             if cycle % REFLECTOR_EVERY_N == 0:
                 from qmemory.core.reflector import run_reflector_cycle
 
                 reflect_result = await run_reflector_cycle()
-                if reflect_result.get("found_work"):
-                    found_work = True
+                contradictions_found = reflect_result.get("contradictions", 0)
                 logger.info(
                     "worker.reflector cycle=%d result=%s", cycle, reflect_result
                 )
 
+            # --- Job 5: Linter (every cycle) ---
+            # Runs 4 health checks: orphans, stale, gaps, quality.
+            from qmemory.core.linter import run_linter_checks
+
+            linter_findings = await run_linter_checks()
+            all_findings.extend(linter_findings)
+            logger.info(
+                "worker.linter cycle=%d findings=%d", cycle, len(linter_findings)
+            )
+
         except Exception:
             logger.exception("worker.cycle_error cycle=%d", cycle)
 
-        # --- Timing and scheduling ---
-        elapsed = (time.monotonic() - cycle_start) * 1000
-        interval = ACTIVE_INTERVAL if found_work else IDLE_INTERVAL
+        # --- Save health report ---
+        elapsed_ms = int((time.monotonic() - cycle_start) * 1000)
+
+        orphans = len([f for f in all_findings if f["check"] == "orphan"])
+        stale = len([f for f in all_findings if f["check"] == "stale"])
+        gaps = [
+            f["node_id"].split(":")[-1]
+            for f in all_findings
+            if f["check"] == "gap"
+        ]
+        quality = len([f for f in all_findings if f["check"] == "quality"])
+
+        # Add linker/dedup findings to the report
+        if links_created > 0:
+            all_findings.append({
+                "check": "linker",
+                "severity": "info",
+                "node_id": "worker:linker",
+                "detail": f"Linker created {links_created} new edges",
+                "action": None,
+                "fixed": True,
+            })
+        if dupes_merged > 0:
+            all_findings.append({
+                "check": "dedup",
+                "severity": "info",
+                "node_id": "worker:dedup",
+                "detail": f"Dedup merged {dupes_merged} duplicate memories",
+                "action": None,
+                "fixed": True,
+            })
+
+        try:
+            from qmemory.core.health import save_health_report
+
+            await save_health_report(
+                orphans_found=orphans,
+                contradictions_found=contradictions_found,
+                stale_found=stale,
+                links_created=links_created,
+                dupes_merged=dupes_merged,
+                gaps=gaps,
+                quality_issues=quality,
+                findings=all_findings,
+                duration_ms=elapsed_ms,
+            )
+        except Exception:
+            logger.exception("worker.report_save_error cycle=%d", cycle)
 
         logger.info(
-            "worker.cycle_done cycle=%d found_work=%s elapsed_ms=%.0f next_in=%ds",
+            "worker.cycle_done cycle=%d elapsed_ms=%d findings=%d",
             cycle,
-            found_work,
-            elapsed,
-            interval,
+            elapsed_ms,
+            len(all_findings),
         )
+
+        # Exit if --once
+        if once:
+            logger.info("worker.once_done exiting")
+            return
 
         await asyncio.sleep(interval)
 

@@ -1,17 +1,20 @@
 """
 Qmemory MCP Server (Python)
 
-FastMCP server that exposes 7 Qmemory tools for Claude Code and Claude.ai.
+FastMCP server that exposes 10 Qmemory tools for Claude Code and Claude.ai.
 Each tool is a thin wrapper — all business logic lives in qmemory/core/.
 
-7 tools:
+10 tools:
   qmemory_bootstrap  — Load full memory context at conversation start
   qmemory_search     — 4-tier recall with graph connection hints
+  qmemory_get        — Fetch by ID + graph neighbor traversal
   qmemory_save       — Save a fact with evidence tracking + dedup
   qmemory_correct    — Fix, delete, update, or unlink a memory
   qmemory_link       — Create a relationship edge between any two nodes
   qmemory_person     — Create or find a person with linked identities
   qmemory_import     — Import a markdown file into the graph (stub for now)
+  qmemory_books      — Browse books hierarchically
+  qmemory_health     — Check graph health (orphans, stale, gaps, quality)
 
 Read-only tools (qmemory_bootstrap, qmemory_search) are annotated with
 readOnlyHint=True so MCP clients know they don't modify any state.
@@ -519,4 +522,61 @@ async def qmemory_books(
     else:
         result = await list_books(query_text=query)
 
+    return json.dumps(result, default=str, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 10: qmemory_health
+# Read-only — reads the latest worker health report.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+async def qmemory_health(
+    check: str = "all",
+) -> str:
+    """Check the health of your memory graph.
+
+    Returns the latest health report from the background worker.
+    Shows orphan nodes, stale facts, missing links, data quality issues,
+    and coverage gaps — with suggested actions for each finding.
+
+    The worker runs these checks daily. This tool reads the latest report.
+
+    Args:
+        check: Which check to show. Options:
+               all            — everything (default)
+               orphans        — nodes with zero connections
+               contradictions — conflicting memories
+               stale          — expired or decayed memories
+               missing_links  — links created by the linker
+               gaps           — categories with few memories
+               quality        — broken edges, empty content
+
+    Returns JSON with summary counts, detailed findings, and suggested
+    actions for each issue. Run 'qmemory worker --once' first if no
+    report exists yet.
+    """
+    from qmemory.core.health import get_latest_report
+
+    result = await get_latest_report(check=check)
+    if result is None:
+        return json.dumps({
+            "status": "no_report",
+            "message": "No health report found. Run 'qmemory worker --once' to generate one.",
+            "actions": [
+                {
+                    "tool": "shell",
+                    "command": "qmemory worker --once",
+                    "description": "Run the worker once to generate a health report",
+                }
+            ],
+        }, ensure_ascii=False)
     return json.dumps(result, default=str, ensure_ascii=False)

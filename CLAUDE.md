@@ -15,6 +15,8 @@ qmemory status                  # check SurrealDB connection + record counts
 qmemory serve                   # MCP server (stdio for Claude Code)
 qmemory serve-http --port 3777  # MCP server (HTTP for Claude.ai)
 qmemory schema                  # apply DB schema (safe to re-run)
+qmemory worker --once           # run one maintenance cycle and exit
+qmemory worker --interval 3600  # run every hour (default: daily)
 ```
 
 ## Prerequisites
@@ -106,6 +108,9 @@ qmemory/
     scratchpad.py    #   Per-session working memory
     metrics.py       #   Fire-and-forget event tracking
     token_budget.py  #   Hourly rate limiter for background LLM calls
+    health.py        #   Read/save worker health reports
+    linter.py        #   6 graph health checks (orphans, stale, gaps, quality)
+    dedup_worker.py  #   Batch dedup via word similarity + Haiku
   formatters/        # Memory -> text rendering
     memories.py      #   Evidence markers, category grouping, hypotheses
     graph_map.py     #   Entity graph as readable text
@@ -143,7 +148,7 @@ surrealdb/           # Railway SurrealDB service (separate container)
 - The `db` fixture in `tests/conftest.py` applies schema, yields connection, then `REMOVE NAMESPACE` on cleanup.
 - 9 known failing tests — all the same issue: SurrealDB v3 edge queries with `<-.id` syntax and `WHERE in = type::record(...)` return empty. Core logic works; it's a SurrealDB v3 syntax change.
 
-## MCP Tools (9 total)
+## MCP Tools (10 total)
 
 Two transports: **stdio** (Claude Code, local, `qmemory serve`) and **HTTP** (Claude.ai, remote, `https://mem0.qusai.org/mcp/`).
 HTTP is open access (no auth). Stdio has no auth (runs locally).
@@ -165,6 +170,7 @@ When adding/changing tool parameters, update BOTH files.
 | `qmemory_person` | No | Create/find person with linked identities |
 | `qmemory_import` | No | Import markdown file (stub — not yet implemented) |
 | `qmemory_books` | Yes | Browse books: list books → sections → content |
+| `qmemory_health` | Yes | Check graph health — orphans, stale, gaps, quality |
 
 ## Book Knowledge
 
