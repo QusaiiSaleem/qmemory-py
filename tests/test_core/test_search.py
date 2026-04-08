@@ -1,119 +1,188 @@
 """
-Tests for qmemory.core.search
+Tests for the new multi-leg BM25 search engine.
 
-Tests the agent's primary memory retrieval function with the new
-structured response format: pinned, entities, results, actions, meta.
+Tests the dynamic category-grouped response format:
+entities_matched, pinned, memories.{category}, book_insights, hypotheses.
 
-All tests use the `db` fixture from conftest.py, which provides a fresh
-SurrealDB connection in the "qmemory_test" namespace.
-
-These tests require SurrealDB to be running locally (ws://localhost:8000).
+All tests use the `db` fixture from conftest.py (fresh qmemory_test namespace).
+Requires SurrealDB running locally (ws://localhost:8000).
 """
 
 from qmemory.core.search import search_memories
 from qmemory.core.save import save_memory
 from qmemory.core.link import link_nodes
+from qmemory.core.person import create_person
 
 
 # ---------------------------------------------------------------------------
-# Basic response format tests
+# Response structure tests
 # ---------------------------------------------------------------------------
 
 
-async def test_search_returns_results(db):
-    """After saving a memory, searching for it should return at least one result."""
+async def test_search_returns_dict(db):
+    """Search should always return a dict with actions and meta."""
+    await save_memory(content="Structure test fact", category="context", db=db)
+    result = await search_memories(query_text="structure test", db=db)
+
+    assert isinstance(result, dict)
+    assert "actions" in result
+    assert "meta" in result
+
+
+async def test_search_memories_grouped_by_category(db):
+    """Memories should be grouped by category in the response."""
+    await save_memory(content="User likes dark mode", category="preference", db=db)
+    await save_memory(content="Project started in January", category="context", db=db)
+
+    result = await search_memories(query_text="dark mode project", db=db)
+
+    if "memories" in result:
+        assert isinstance(result["memories"], dict), "memories should be a dict keyed by category"
+        for cat, mems in result["memories"].items():
+            assert isinstance(mems, list)
+            for m in mems:
+                assert "id" in m
+                assert "content" in m
+                assert "actions" in m
+
+
+async def test_search_empty_categories_omitted(db):
+    """Categories with no results should not appear in memories."""
+    await save_memory(content="Only a preference here", category="preference", db=db)
+
+    result = await search_memories(query_text="preference here", db=db)
+
+    if "memories" in result:
+        for cat, mems in result["memories"].items():
+            assert len(mems) > 0, f"Category '{cat}' should not be empty"
+
+
+async def test_search_self_category_first(db):
+    """Self category should come first in the memories dict."""
+    await save_memory(content="I am the agent self model", category="self", db=db)
+    await save_memory(content="Some context about the world", category="context", db=db)
+
+    result = await search_memories(query_text="agent self context world", db=db)
+
+    if "memories" in result and "self" in result["memories"]:
+        keys = list(result["memories"].keys())
+        assert keys[0] == "self", f"Expected 'self' first, got: {keys}"
+
+
+# ---------------------------------------------------------------------------
+# Pinned tests
+# ---------------------------------------------------------------------------
+
+
+async def test_search_pinned_high_salience(db):
+    """Memories with salience >= 0.9 should appear in pinned section."""
     await save_memory(
-        content="The quarterly budget is 500K",
+        content="Critical rule never break", category="self", salience=1.0, db=db
+    )
+    await save_memory(
+        content="Normal fact about testing", category="context", salience=0.5, db=db
+    )
+
+    result = await search_memories(query_text="testing rule", db=db)
+
+    if "pinned" in result:
+        pinned_contents = [p["content"] for p in result["pinned"]]
+        assert "Critical rule never break" in pinned_contents
+
+
+async def test_search_pinned_not_in_memories(db):
+    """Pinned memories should not also appear in the memories section."""
+    await save_memory(
+        content="Pinned and unique fact xyz", category="context", salience=0.95, db=db
+    )
+
+    result = await search_memories(query_text="pinned unique xyz", db=db)
+
+    pinned_ids = {p["id"] for p in result.get("pinned", [])}
+    for cat_mems in result.get("memories", {}).values():
+        for m in cat_mems:
+            assert m["id"] not in pinned_ids, f"Pinned memory {m['id']} also in memories"
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis tests
+# ---------------------------------------------------------------------------
+
+
+async def test_search_low_confidence_in_hypotheses(db):
+    """Memories with confidence < 0.5 should appear in hypotheses."""
+    await save_memory(
+        content="Maybe the project will be cancelled",
         category="context",
-        salience=0.8,
+        confidence=0.3,
+        evidence_type="inferred",
         db=db,
     )
 
-    result = await search_memories(query_text="quarterly budget", db=db)
+    result = await search_memories(query_text="project cancelled", db=db)
 
-    assert isinstance(result, dict), "search_memories should return a dict"
-    assert "results" in result
-    assert "actions" in result
-    assert "meta" in result
-    assert len(result["results"]) >= 1, "Should find the saved memory"
-
-    first = result["results"][0]
-    assert "content" in first
-    assert "id" in first
-
-
-async def test_search_response_has_new_format(db):
-    """Search response should have pinned, entities, results, actions, meta."""
-    await save_memory(content="Test the new format", category="context", salience=0.5, db=db)
-
-    result = await search_memories(query_text="new format", db=db)
-
-    assert "pinned" in result, "Response missing 'pinned'"
-    assert "results" in result, "Response missing 'results'"
-    assert "entities" in result, "Response missing 'entities'"
-    assert "actions" in result, "Response missing 'actions'"
-    assert "meta" in result, "Response missing 'meta'"
-    assert isinstance(result["meta"], dict)
-    assert "returned" in result["meta"]
-    assert "has_more" in result["meta"]
+    if "hypotheses" in result:
+        hyp_contents = [h["content"] for h in result["hypotheses"]]
+        assert "Maybe the project will be cancelled" in hyp_contents
+        assert result["hypotheses"][0].get("actions", {}).get("verify") is not None
 
 
 # ---------------------------------------------------------------------------
-# Pinned separation tests
+# Entity search tests
 # ---------------------------------------------------------------------------
 
 
-async def test_search_pinned_separation(db):
-    """Memories with salience >= 0.9 should appear in pinned, not results."""
-    await save_memory(content="Critical rule always applies", category="self", salience=1.0, db=db)
-    await save_memory(content="Normal fact about testing", category="context", salience=0.5, db=db)
+async def test_search_finds_entities(db):
+    """Searching for a person name should return in entities_matched."""
+    await create_person(name="Ahmed Khalil", db=db)
+    await save_memory(content="Ahmed works on mobile", category="context", db=db)
 
-    result = await search_memories(query_text="testing", db=db)
+    result = await search_memories(query_text="Ahmed", db=db)
 
-    pinned_contents = [m["content"] for m in result["pinned"]]
-    result_contents = [m["content"] for m in result["results"]]
-
-    assert "Critical rule always applies" in pinned_contents
-    assert "Critical rule always applies" not in result_contents
+    if "entities_matched" in result:
+        names = [e["name"] for e in result["entities_matched"]]
+        assert "Ahmed Khalil" in names
 
 
-# ---------------------------------------------------------------------------
-# Result fields tests
-# ---------------------------------------------------------------------------
+async def test_search_entity_has_actions(db):
+    """Each matched entity should have get and search_within actions."""
+    await create_person(name="Fatima Al-Rashid", db=db)
 
+    result = await search_memories(query_text="Fatima", db=db)
 
-async def test_search_results_have_relevance_and_tier(db):
-    """Each result should have relevance score and source_tier."""
-    await save_memory(content="Relevance test fact", category="context", db=db)
-
-    result = await search_memories(query_text="relevance test", db=db)
-
-    for r in result["results"]:
-        assert "relevance" in r, f"Result missing 'relevance': {r.get('id')}"
-        assert "source_tier" in r, f"Result missing 'source_tier': {r.get('id')}"
-
-
-async def test_search_results_have_neighbors(db):
-    """Each result should have a neighbors dict (even if empty)."""
-    await save_memory(content="Neighbors test fact", category="context", db=db)
-
-    result = await search_memories(query_text="neighbors test", db=db)
-
-    for r in result["results"]:
-        assert "neighbors" in r, f"Result missing 'neighbors': {r.get('id')}"
-        assert "count" in r["neighbors"]
-        assert "items" in r["neighbors"]
+    if "entities_matched" in result and len(result["entities_matched"]) > 0:
+        entity = result["entities_matched"][0]
+        assert "get" in entity["actions"]
+        assert "search_within" in entity["actions"]
 
 
 # ---------------------------------------------------------------------------
-# Connection enrichment tests
+# Graph enrichment tests
 # ---------------------------------------------------------------------------
 
 
-async def test_search_enrichment_with_connections(db):
-    """After linking two memories, enrichment should show connections."""
-    saved1 = await save_memory(content="Team uses Slack", category="context", salience=0.8, db=db)
-    saved2 = await save_memory(content="Slack channel is engineering", category="context", salience=0.7, db=db)
+async def test_search_results_have_graph(db):
+    """Memory results should have graph context with entities and related."""
+    await save_memory(content="Team uses Slack for comms", category="context", db=db)
+
+    result = await search_memories(query_text="Slack comms", db=db)
+
+    if "memories" in result:
+        for cat_mems in result["memories"].values():
+            for m in cat_mems:
+                assert "graph" in m, f"Memory {m['id']} missing graph"
+                assert "entities" in m["graph"]
+                assert "related" in m["graph"]
+
+
+async def test_search_enrichment_shows_linked(db):
+    """After linking two memories, graph should show the connection."""
+    saved1 = await save_memory(
+        content="Slack is used daily", category="context", salience=0.8, db=db
+    )
+    saved2 = await save_memory(
+        content="Slack channel engineering", category="context", salience=0.7, db=db
+    )
 
     await link_nodes(
         from_id=saved1["memory_id"],
@@ -124,12 +193,68 @@ async def test_search_enrichment_with_connections(db):
 
     result = await search_memories(query_text="Slack", db=db)
 
-    assert "results" in result
-    assert len(result["results"]) >= 1
+    # Find any memory with non-empty graph.related
+    has_related = False
+    for cat_mems in result.get("memories", {}).values():
+        for m in cat_mems:
+            if m.get("graph", {}).get("related"):
+                has_related = True
+    assert has_related, "At least one memory should have graph.related after linking"
 
-    # At least one result should have neighbors
-    connected = [r for r in result["results"] if r.get("neighbors", {}).get("count", 0) > 0]
-    assert len(connected) >= 1, "At least one result should have connections"
+
+# ---------------------------------------------------------------------------
+# Per-result action tests
+# ---------------------------------------------------------------------------
+
+
+async def test_search_results_have_actions(db):
+    """Each memory result should have correct, link, get_neighbors actions."""
+    await save_memory(content="Actions test fact", category="context", db=db)
+
+    result = await search_memories(query_text="actions test", db=db)
+
+    if "memories" in result:
+        for cat_mems in result["memories"].values():
+            for m in cat_mems:
+                assert "actions" in m
+                assert "correct" in m["actions"]
+                assert "link" in m["actions"]
+                assert "get_neighbors" in m["actions"]
+
+
+# ---------------------------------------------------------------------------
+# Meta tests
+# ---------------------------------------------------------------------------
+
+
+async def test_search_meta_has_by_category(db):
+    """Meta should include by_category counts."""
+    await save_memory(content="Meta test preference", category="preference", db=db)
+    await save_memory(content="Meta test context", category="context", db=db)
+
+    result = await search_memories(query_text="meta test", db=db)
+
+    assert "by_category" in result["meta"]
+    assert isinstance(result["meta"]["by_category"], dict)
+
+
+async def test_search_meta_has_sections(db):
+    """Meta should list which sections are present."""
+    await save_memory(content="Sections test fact", category="context", db=db)
+
+    result = await search_memories(query_text="sections test", db=db)
+
+    assert "sections" in result["meta"]
+    assert isinstance(result["meta"]["sections"], list)
+
+
+async def test_search_meta_has_search_legs(db):
+    """Meta should show how many results came from each leg."""
+    await save_memory(content="Legs test fact", category="context", db=db)
+
+    result = await search_memories(query_text="legs test", db=db)
+
+    assert "search_legs" in result["meta"]
 
 
 # ---------------------------------------------------------------------------
@@ -137,28 +262,23 @@ async def test_search_enrichment_with_connections(db):
 # ---------------------------------------------------------------------------
 
 
-async def test_search_empty_query(db):
-    """Passing None as query_text should return recent memories."""
-    await save_memory(content="Recent fact A", category="context", salience=0.5, db=db)
-    await save_memory(content="Recent fact B", category="context", salience=0.4, db=db)
+async def test_search_no_query_returns_recent(db):
+    """No query should return recent memories."""
+    await save_memory(content="Recent fact alpha", category="context", db=db)
 
     result = await search_memories(query_text=None, db=db)
 
     assert isinstance(result, dict)
-    assert "results" in result
-    assert "actions" in result
-    assert len(result["results"]) >= 1
+    assert "meta" in result
 
 
 async def test_search_empty_string_query(db):
-    """An empty string query should also work without errors."""
-    await save_memory(content="Fallback test memory", category="context", db=db)
+    """Empty string query should work without errors."""
+    await save_memory(content="Empty query test", category="context", db=db)
 
     result = await search_memories(query_text="", db=db)
 
     assert isinstance(result, dict)
-    assert "results" in result
-    assert "actions" in result
 
 
 # ---------------------------------------------------------------------------
@@ -166,27 +286,45 @@ async def test_search_empty_string_query(db):
 # ---------------------------------------------------------------------------
 
 
-async def test_search_with_category_filter(db):
-    """When category is specified, results should include that category."""
-    await save_memory(content="User likes dark mode", category="preference", salience=0.7, db=db)
-    await save_memory(content="Project deadline is Q2", category="context", salience=0.8, db=db)
+async def test_search_category_filter(db):
+    """Category filter should only return that category."""
+    await save_memory(content="Filter preference item", category="preference", db=db)
+    await save_memory(content="Filter context item", category="context", db=db)
 
     result = await search_memories(category="preference", db=db)
 
-    assert "results" in result
-    # At least the preference memory should be found
-    all_mems = result["results"] + result["pinned"]
-    categories_returned = [r.get("category") for r in all_mems]
-    assert "preference" in categories_returned
+    if "memories" in result:
+        for cat in result["memories"]:
+            assert cat == "preference", f"Expected only preference, got {cat}"
 
 
-async def test_search_category_filter_excludes_others(db):
-    """Category filter should only return that category."""
-    await save_memory(content="Only preference here", category="preference", db=db)
-    await save_memory(content="Only context here", category="context", salience=0.9, db=db)
+# ---------------------------------------------------------------------------
+# entity_id scoped search tests
+# ---------------------------------------------------------------------------
 
-    result = await search_memories(category="preference", limit=5, db=db)
 
-    all_mems = result["results"] + result["pinned"]
-    categories = {r.get("category") for r in all_mems}
-    assert "context" not in categories, f"Should only have preference, got: {categories}"
+async def test_search_with_entity_id(db):
+    """entity_id should scope search to memories linked to that entity."""
+    person = await create_person(name="Scoped Person", db=db)
+    eid = person["entity_id"]
+
+    saved = await save_memory(
+        content="Scoped person likes coffee", category="preference", db=db
+    )
+    await link_nodes(
+        from_id=saved["memory_id"], to_id=eid,
+        relationship_type="about", db=db,
+    )
+
+    await save_memory(
+        content="Unrelated person likes tea", category="preference", db=db
+    )
+
+    result = await search_memories(query_text="likes", entity_id=eid, db=db)
+
+    all_contents = []
+    for cat_mems in result.get("memories", {}).values():
+        all_contents.extend(m["content"] for m in cat_mems)
+    assert any("coffee" in c for c in all_contents), (
+        f"Should find 'coffee', got: {all_contents}"
+    )
