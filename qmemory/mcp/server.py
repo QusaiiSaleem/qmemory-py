@@ -100,14 +100,15 @@ async def qmemory_search(
     before: str | None = None,
     include_tool_calls: bool = False,
     source_type: str | None = None,
+    entity_id: str | None = None,
 ) -> str:
     """Search cross-session memory by meaning, category, or scope.
 
-    Returns memories from ALL past conversations, ranked by relevance,
-    with graph connection hints and structured next-step actions.
+    Returns memories from ALL past conversations, grouped by category,
+    with graph context and structured next-step actions.
 
     Args:
-        query:             Free-text search query (BM25 + vector similarity).
+        query:             Free-text search query (multi-leg BM25).
                            Leave empty to get recent memories without text search.
         category:          Filter to one category (HARD filter — excludes others):
                            self, style, preference, context, decision,
@@ -121,9 +122,17 @@ async def qmemory_search(
         include_tool_calls: Also search past tool call history (default False).
         source_type:       Filter by relation type pointing to the memory.
                            E.g. "from_book" returns only memories extracted from books.
+        entity_id:         Scope search to memories linked to this entity.
+                           E.g. "entity:ent123abc" — only returns memories about that person/concept.
 
-    Returns JSON with {pinned, entities, results, actions, meta}.
-    Each result has relevance score, source_tier, and neighbor previews.
+    Returns JSON with dynamic sections:
+      entities_matched — matched people/concepts with actions
+      pinned — high-salience memories (>= 0.9)
+      memories.{category} — grouped by category, ranked by relevance
+      book_insights — memories linked to books
+      hypotheses — low-confidence memories needing verification
+      actions — suggested next steps
+      meta — counts, sections list, search leg breakdown
     """
     from qmemory.core.search import search_memories
 
@@ -137,6 +146,7 @@ async def qmemory_search(
         before=before,
         include_tool_calls=include_tool_calls,
         source_type=source_type,
+        entity_id=entity_id,
     )
     return json.dumps(results, default=str, ensure_ascii=False)
 
