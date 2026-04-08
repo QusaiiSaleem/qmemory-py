@@ -1,43 +1,68 @@
 """
-Core Search — Agent's Primary Memory Retrieval with Graph Enrichment
+Core Search — Multi-Leg BM25 + RRF Fusion + Dynamic Category-Grouped Results
 
-Combines the recall pipeline with:
-  1. Pinned separation — high-salience memories in their own section
-  2. Entity search — persons/concepts matching the query
-  3. Graph enrichment — neighbor hints on top results
-  4. Structured actions — next-step tool calls (not text nudges)
-  5. Meta — pagination info (returned, offset, has_more)
+Three parallel search legs:
+  1. Content Leg  — BM25 fulltext on memory.content
+  2. Entity Leg   — BM25 fulltext on entity.name
+  3. Graph Leg    — entity name match -> relates edges -> linked memories
 
-Response format:
-  {
-    "pinned": [...],     # salience >= 0.9 (max 3)
-    "entities": [...],   # matched persons/concepts with memory_count
-    "results": [...],    # relevance-ranked, each with neighbors
-    "actions": [...],    # structured tool call suggestions
-    "meta": {...}        # returned, offset, has_more
-  }
+Results are fused via RRF (Reciprocal Rank Fusion), then dynamically
+routed to response sections:
+  - entities_matched[] — matched entities with actions
+  - pinned[]           — high-salience memories (>= 0.9)
+  - memories.{cat}     — category-grouped, relevance-ranked
+  - book_insights[]    — memories linked to book entities
+  - hypotheses[]       — low-confidence memories (< 0.5)
+
+All sections are dynamic — only present when results exist.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from typing import Any
 
-from qmemory.core.recall import MEMORY_FIELDS, _format_age, recall
+from qmemory.core.recall import MEMORY_FIELDS, _format_age
 from qmemory.db.client import get_db, query
+from qmemory.formatters.actions import (
+    build_actions,
+    build_book_insight_actions,
+    build_category_drill_down,
+    build_entity_actions,
+    build_memory_actions,
+)
 from qmemory.formatters.response import attach_meta
 
 logger = logging.getLogger(__name__)
 
+# --- Constants ---
+RRF_K = 60                  # RRF fusion constant (standard value)
+MAX_PINNED = 3              # Max pinned memories to extract
+PINNED_THRESHOLD = 0.9      # Salience threshold for pinned
+HYPOTHESIS_THRESHOLD = 0.5  # Confidence below this = hypothesis
+TOP_N_ENRICH = 5            # How many results to enrich with graph
+MAX_HINTS_PER_RESULT = 3    # Max neighbor hints per result
+VECTOR_RERANK_THRESHOLD = 5 # Only fire vector if BM25 returns fewer than this
+ENTITY_LEG_LIMIT = 5        # Max entities to return
+CONTENT_LEG_LIMIT = 50      # Max BM25 content results (pre-fusion)
+GRAPH_LEG_LIMIT = 15        # Max graph-traversal results (pre-fusion)
 
-# How many top results to enrich with connection hints
-TOP_N_ENRICH = 5
-# Max connection hints per result
-MAX_HINTS_PER_RESULT = 3
-# Max pinned memories to separate
-MAX_PINNED = 3
-# Salience threshold for pinned
-PINNED_THRESHOLD = 0.9
+# Category display order — self always first
+CATEGORY_ORDER = [
+    "self", "style", "preference", "context",
+    "decision", "idea", "feedback", "domain",
+]
+
+# Min word length for entity name matching in graph leg
+_MIN_WORD_LEN = 3
+_MAX_ENTITY_WORDS = 10
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 
 async def search_memories(
@@ -51,76 +76,54 @@ async def search_memories(
     include_tool_calls: bool = False,
     owner_id: str | None = None,
     source_type: str | None = None,
+    entity_id: str | None = None,
     db: Any = None,
 ) -> dict:
-    """Search memories with graph enrichment. Returns structured JSON with
-    pinned, entities, results, actions, and meta."""
+    """Search memories with multi-leg BM25, RRF fusion, and dynamic category grouping.
 
-    logger.debug("Searching with owner=%s", owner_id)
-    categories = [category] if category else None
+    Returns structured JSON with dynamic sections based on what was found.
+    """
+    logger.debug(
+        "Search: query=%s category=%s entity_id=%s owner=%s",
+        query_text, category, entity_id, owner_id,
+    )
 
     async def _run(conn: Any) -> dict:
-        # Step 1: Run recall pipeline (fetch extra to account for pinned extraction)
-        raw_results = await recall(
-            query_text=query_text,
-            scope=scope,
-            categories=categories,
-            limit=limit + MAX_PINNED,
+        # Build shared filter clauses for all legs
+        filters = _build_filters(category, scope, after, before, source_type)
+
+        # --- Run 3 legs in parallel ---
+        if query_text and query_text.strip():
+            content_task = _content_leg(query_text, filters, limit, entity_id, conn)
+            entity_task = _entity_leg(query_text, conn) if not entity_id else _empty_list()
+            graph_task = _graph_leg(query_text, filters, entity_id, conn)
+
+            content_results, entity_results, graph_results = await asyncio.gather(
+                content_task, entity_task, graph_task
+            )
+        else:
+            # No query — just fetch recent memories
+            content_results = await _recent_fallback(filters, limit, conn)
+            entity_results = []
+            graph_results = []
+
+        # --- RRF Fusion (memories only, from Content + Graph legs) ---
+        fused_memories = _rrf_fuse(content_results, graph_results)
+
+        # --- Optional vector reranker ---
+        if query_text and len(fused_memories) < VECTOR_RERANK_THRESHOLD:
+            fused_memories = await _vector_rerank(
+                query_text, fused_memories, filters, limit, conn
+            )
+
+        # --- Extract & Separate ---
+        return await _extract_and_separate(
+            fused_memories=fused_memories,
+            entity_results=entity_results,
+            query_text=query_text or "",
+            limit=limit,
             offset=offset,
-            owner_id=owner_id,
-            source_type=source_type,
-            after=after,
-            before=before,
             db=conn,
-        )
-
-        # Step 2: Separate pinned (salience >= threshold) from regular results
-        pinned: list[dict] = []
-        regular: list[dict] = []
-        for r in raw_results:
-            if r.get("salience", 0) >= PINNED_THRESHOLD and len(pinned) < MAX_PINNED:
-                pinned.append(_format_result(r))
-            else:
-                regular.append(r)
-
-        # Step 3: Enrich regular results with graph connections
-        regular = await _enrich_with_connections(regular, conn)
-
-        # Step 4: Format results
-        formatted_results = [_format_result(r) for r in regular[:limit]]
-
-        # Step 5: Search entities in parallel
-        entities: list[dict] = []
-        if query_text:
-            entities = await _search_entities(query_text, conn)
-
-        # Step 6: Build response
-        has_more = len(regular) > limit
-
-        # Find first connected result and first entity for action suggestions
-        first_connected = next(
-            (r for r in formatted_results if r.get("neighbors", {}).get("count", 0) > 0),
-            None,
-        )
-        first_entity = entities[0] if entities else None
-
-        response = {
-            "pinned": pinned,
-            "entities": entities,
-            "results": formatted_results,
-        }
-
-        return attach_meta(
-            response,
-            actions_context={
-                "type": "search",
-                "memory_id": first_connected["id"] if first_connected else None,
-                "neighbor_count": first_connected["neighbors"]["count"] if first_connected else 0,
-                "entity_id": first_entity["id"] if first_entity else None,
-            },
-            returned=len(formatted_results),
-            offset=offset,
-            has_more=has_more,
         )
 
     if db is not None:
@@ -130,183 +133,740 @@ async def search_memories(
             return await _run(conn)
 
 
+async def _empty_list() -> list:
+    """Async no-op that returns empty list (for asyncio.gather slots)."""
+    return []
+
+
 # ---------------------------------------------------------------------------
-# Result formatting
+# Shared filter builder
 # ---------------------------------------------------------------------------
 
 
-def _format_result(r: dict) -> dict:
-    """Format a raw recall result into the agent-facing format."""
-    formatted = {
-        "id": str(r.get("id", "")),
-        "content": r.get("content", ""),
-        "category": r.get("category", ""),
-        "salience": r.get("salience", 0),
-        "relevance": round(r.get("_score", r.get("salience", 0)), 3),
-        "source_tier": r.get("source_tier", "unknown"),
-        "age": _format_age(r.get("created_at")),
-        "created_at": str(r.get("created_at", "")),
+def _build_filters(
+    category: str | None,
+    scope: str | None,
+    after: str | None,
+    before: str | None,
+    source_type: str | None,
+) -> dict:
+    """Build shared filter clauses and params for all search legs."""
+    clauses = ""
+    params: dict[str, Any] = {}
+
+    if category:
+        clauses += " AND category IN $cats"
+        params["cats"] = [category]
+
+    if scope and scope != "any":
+        clauses += ' AND (scope = $scope OR scope = "global")'
+        params["scope"] = scope
+
+    if after:
+        clauses += " AND created_at >= <datetime>$after_dt"
+        params["after_dt"] = after
+
+    if before:
+        clauses += " AND created_at <= <datetime>$before_dt"
+        params["before_dt"] = before
+
+    if source_type:
+        clauses += " AND source_type = $source_type"
+        params["source_type"] = source_type
+
+    return {"clauses": clauses, "params": params}
+
+
+# ---------------------------------------------------------------------------
+# Leg 1: Content BM25
+# ---------------------------------------------------------------------------
+
+
+async def _content_leg(
+    query_text: str,
+    filters: dict,
+    limit: int,
+    entity_id: str | None,
+    db: Any,
+) -> list[dict]:
+    """BM25 fulltext search on memory.content."""
+    params: dict[str, Any] = {
+        "query": query_text,
+        "limit": min(limit, CONTENT_LEG_LIMIT),
     }
+    params.update(filters["params"])
 
-    # Convert old connections format to new neighbors format
-    if "connections" in r:
-        conn = r["connections"]
-        formatted["neighbors"] = {
-            "count": conn.get("total", 0),
-            "items": [
-                {
-                    "id": h.get("target", ""),
-                    "content_preview": h.get("target_name", "")[:80],
-                    "edge_type": h.get("type", "relates"),
-                    "edge_direction": "out",
-                }
-                for h in conn.get("hints", [])
-            ],
-        }
-    else:
-        formatted["neighbors"] = {"count": 0, "items": []}
+    # Optional entity_id scope — only memories linked to this entity
+    entity_clause = ""
+    if entity_id:
+        entity_clause = (
+            " AND id IN (SELECT VALUE in FROM relates WHERE out = <record>$entity_id)"
+        )
+        params["entity_id"] = entity_id
 
-    return formatted
+    surql = f"""
+    SELECT {MEMORY_FIELDS} FROM memory
+    WHERE content @@ $query
+        AND is_active = true
+        AND (valid_until IS NONE OR valid_until > time::now())
+        {entity_clause}
+        {filters["clauses"]}
+    ORDER BY salience DESC
+    LIMIT $limit;
+    """
+
+    results = await query(db, surql, params)
+    if not results or not isinstance(results, list):
+        return []
+
+    # Compute word-overlap relevance (search::score() broken in SurrealDB v3)
+    query_words = set(query_text.lower().split())
+    for i, r in enumerate(results):
+        r["_leg"] = "content"
+        r["_rank"] = i
+        content_words = set((r.get("content") or "").lower().split())
+        overlap = len(query_words & content_words)
+        r["_bm25_relevance"] = min(1.0, overlap / max(len(query_words), 1))
+
+    logger.debug("Content leg: %d results", len(results))
+    return results
 
 
 # ---------------------------------------------------------------------------
-# Entity search
+# Leg 2: Entity BM25
 # ---------------------------------------------------------------------------
 
 
-async def _search_entities(query_text: str, db: Any) -> list[dict]:
-    """Search entity table for persons/concepts matching the query."""
-    try:
-        params: dict[str, Any] = {"query": query_text.lower()}
+async def _entity_leg(query_text: str, db: Any) -> list[dict]:
+    """BM25 fulltext search on entity.name. Returns entity dicts, not memories."""
+    params: dict[str, Any] = {"query": query_text, "limit": ENTITY_LEG_LIMIT}
 
-        entity_surql = """
-        SELECT id, name, type
+    # BM25 search on entity names (uses idx_entity_name_ft)
+    surql = """
+    SELECT id, name, type, aliases
+    FROM entity
+    WHERE name @@ $query
+        AND is_active != false
+    LIMIT $limit;
+    """
+
+    rows = await query(db, surql, params)
+    if not rows or not isinstance(rows, list):
+        # Fallback: substring match (for short names BM25 might miss)
+        surql_fallback = """
+        SELECT id, name, type, aliases
         FROM entity
         WHERE is_active != false
-            AND (
-                string::contains(string::lowercase(name), $query)
-                OR $query IN aliases
-            )
-        LIMIT 5;
+            AND string::contains(string::lowercase(name), string::lowercase($query))
+        LIMIT $limit;
         """
-
-        rows = await query(db, entity_surql, params)
+        rows = await query(db, surql_fallback, params)
         if not rows or not isinstance(rows, list):
             return []
 
-        entities = []
-        for e in rows:
-            if not isinstance(e, dict) or not e.get("id"):
-                continue
+    # Count linked memories for each entity
+    entities = []
+    for e in rows:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        eid = str(e["id"])
+        count_rows = await query(
+            db,
+            "SELECT count() AS c FROM relates WHERE in = <record>$eid OR out = <record>$eid GROUP ALL",
+            {"eid": eid},
+        )
+        mem_count = 0
+        if count_rows and isinstance(count_rows, list) and len(count_rows) > 0:
+            mem_count = count_rows[0].get("c", 0)
 
-            eid = str(e["id"])
-            # Count linked edges (memories + other entities)
-            count_rows = await query(
-                db,
-                "SELECT count() AS c FROM relates WHERE in = <record>$eid OR out = <record>$eid GROUP ALL",
-                {"eid": eid},
-            )
-            mem_count = 0
-            if count_rows and isinstance(count_rows, list) and len(count_rows) > 0:
-                mem_count = count_rows[0].get("c", 0)
+        entities.append({
+            "id": eid,
+            "name": e.get("name", ""),
+            "type": e.get("type", ""),
+            "memory_count": mem_count,
+            "actions": build_entity_actions(eid),
+        })
 
-            entities.append({
-                "id": eid,
-                "name": e.get("name", ""),
-                "type": e.get("type", ""),
-                "memory_count": mem_count,
-            })
-
-        return entities
-
-    except Exception as ex:
-        logger.debug("Entity search failed (non-fatal): %s", ex)
-        return []
+    logger.debug("Entity leg: %d entities", len(entities))
+    return entities
 
 
 # ---------------------------------------------------------------------------
-# Graph enrichment (batch query — NOT N+1)
+# Leg 3: Graph Traversal
 # ---------------------------------------------------------------------------
 
 
-async def _enrich_with_connections(
-    results: list[dict],
+async def _graph_leg(
+    query_text: str,
+    filters: dict,
+    entity_id: str | None,
     db: Any,
 ) -> list[dict]:
-    """Enrich the top N search results with graph connection hints."""
-    if not results:
-        return results
+    """Find entities matching query words, traverse relates edges to memories."""
 
-    top_results = results[:TOP_N_ENRICH]
-    top_ids = [str(r["id"]) for r in top_results if r.get("id")]
+    if entity_id:
+        # Scoped search — start directly from this entity
+        return await _graph_from_entity(entity_id, filters, db)
 
-    if not top_ids:
-        return results
+    # Extract candidate words from query
+    words = query_text.split()
+    cleaned = []
+    for w in words:
+        c = re.sub(r"[^a-zA-Z\u0600-\u06FF0-9]", "", w)
+        if len(c) >= _MIN_WORD_LEN:
+            cleaned.append(c)
+    cleaned = cleaned[:_MAX_ENTITY_WORDS]
+
+    if not cleaned:
+        return []
+
+    # Build entity name matching conditions
+    match_conditions = []
+    params: dict[str, Any] = {}
+    params.update(filters["params"])
+    for i, word in enumerate(cleaned):
+        match_conditions.append(
+            f"string::contains(string::lowercase(name), string::lowercase($w{i}))"
+        )
+        params[f"w{i}"] = word
+
+    # Find matching entities
+    entity_surql = f"""
+    SELECT id FROM entity
+    WHERE {" OR ".join(match_conditions)}
+    LIMIT 10;
+    """
+    entity_rows = await query(db, entity_surql, params)
+
+    if not entity_rows or not isinstance(entity_rows, list):
+        return []
+
+    entity_ids = [
+        str(e["id"]) for e in entity_rows
+        if isinstance(e, dict) and e.get("id")
+    ]
+    if not entity_ids:
+        return []
+
+    # Fetch memories linked to these entities
+    all_memories: list[dict] = []
+    for eid in entity_ids:
+        mem_surql = f"""
+        SELECT {MEMORY_FIELDS} FROM memory
+        WHERE is_active = true
+            AND (valid_until IS NONE OR valid_until > time::now())
+            {filters["clauses"]}
+            AND id IN (
+                SELECT VALUE in FROM relates WHERE out = <record>$eid
+            )
+        ORDER BY salience DESC
+        LIMIT $limit;
+        """
+        mem_params: dict[str, Any] = {"eid": eid, "limit": GRAPH_LEG_LIMIT}
+        mem_params.update(filters["params"])
+        rows = await query(db, mem_surql, mem_params)
+        if rows and isinstance(rows, list):
+            all_memories.extend(rows)
+
+    # Tag results
+    for i, m in enumerate(all_memories):
+        m["_leg"] = "graph"
+        m["_rank"] = i
+
+    logger.debug(
+        "Graph leg: %d memories from %d entities",
+        len(all_memories), len(entity_ids),
+    )
+    return all_memories
+
+
+async def _graph_from_entity(
+    entity_id: str, filters: dict, db: Any
+) -> list[dict]:
+    """Fetch memories directly linked to a specific entity (scoped search)."""
+    params: dict[str, Any] = {"eid": entity_id, "limit": GRAPH_LEG_LIMIT}
+    params.update(filters["params"])
+
+    surql = f"""
+    SELECT {MEMORY_FIELDS} FROM memory
+    WHERE is_active = true
+        AND (valid_until IS NONE OR valid_until > time::now())
+        {filters["clauses"]}
+        AND id IN (
+            SELECT VALUE in FROM relates WHERE out = <record>$eid
+        )
+    ORDER BY salience DESC
+    LIMIT $limit;
+    """
+    rows = await query(db, surql, params)
+    if not rows or not isinstance(rows, list):
+        return []
+
+    for i, m in enumerate(rows):
+        m["_leg"] = "graph"
+        m["_rank"] = i
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# RRF Fusion
+# ---------------------------------------------------------------------------
+
+
+def _rrf_fuse(*legs: list[dict]) -> list[dict]:
+    """Reciprocal Rank Fusion — combine results from multiple legs.
+
+    score = sum(1 / (RRF_K + rank)) for each leg where the memory appears.
+    Higher score = found by more legs and ranked higher in each.
+    """
+    scores: dict[str, float] = {}
+    records: dict[str, dict] = {}
+
+    for leg in legs:
+        for i, mem in enumerate(leg):
+            if not isinstance(mem, dict) or not mem.get("id"):
+                continue
+            mid = str(mem["id"])
+            scores[mid] = scores.get(mid, 0) + (1.0 / (RRF_K + i))
+            if mid not in records:
+                records[mid] = mem
+
+    # Sort by RRF score descending
+    sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
+
+    result = []
+    for mid in sorted_ids:
+        mem = records[mid]
+        mem["_rrf_score"] = round(scores[mid], 6)
+        result.append(mem)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Recent fallback (no query)
+# ---------------------------------------------------------------------------
+
+
+async def _recent_fallback(
+    filters: dict, limit: int, db: Any
+) -> list[dict]:
+    """Get most recent active memories when no query is provided."""
+    params: dict[str, Any] = {"limit": limit}
+    params.update(filters["params"])
+
+    surql = f"""
+    SELECT {MEMORY_FIELDS} FROM memory
+    WHERE is_active = true
+        AND (valid_until IS NONE OR valid_until > time::now())
+        {filters["clauses"]}
+    ORDER BY created_at DESC
+    LIMIT $limit;
+    """
+    results = await query(db, surql, params)
+    if not results or not isinstance(results, list):
+        return []
+
+    for i, r in enumerate(results):
+        r["_leg"] = "recent"
+        r["_rank"] = i
+        r["_rrf_score"] = round(1.0 / (RRF_K + i), 6)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Optional vector reranker
+# ---------------------------------------------------------------------------
+
+
+async def _vector_rerank(
+    query_text: str,
+    candidates: list[dict],
+    filters: dict,
+    limit: int,
+    db: Any,
+) -> list[dict]:
+    """Rerank BM25 candidates using vector cosine similarity.
+
+    Only called when BM25 returns fewer than VECTOR_RERANK_THRESHOLD results.
+    Fetches additional vector-similar memories and merges with existing candidates.
+    """
+    from qmemory.core.embeddings import generate_query_embedding
 
     try:
-        # Fetch neighbors for each top result individually
-        # (FROM [id_list] has issues in some SurrealDB v3 configurations)
-        enrichment_map: dict[str, dict] = {}
-        for tid in top_ids:
-            enrichment_surql = f"""
-            SELECT id,
-                ->relates->memory.{{id, content, category}} AS out_memories,
+        query_vec = await generate_query_embedding(query_text)
+        if not query_vec:
+            return candidates
+
+        params: dict[str, Any] = {"query_vec": query_vec, "limit": limit}
+        params.update(filters["params"])
+
+        scope_clause = ""
+        if "scope" in filters["params"]:
+            scope_clause = ' AND (scope = $scope OR scope = "global")'
+
+        surql = f"""
+        SELECT {MEMORY_FIELDS}, vector::similarity::cosine(embedding, $query_vec) AS vec_score
+        FROM memory
+        WHERE is_active = true
+            AND embedding IS NOT NONE
+            AND (valid_until IS NONE OR valid_until > time::now())
+            {scope_clause}
+            {filters["clauses"]}
+        ORDER BY vec_score DESC
+        LIMIT $limit;
+        """
+        vec_results = await query(db, surql, params)
+
+        if not vec_results or not isinstance(vec_results, list):
+            return candidates
+
+        # Tag vector results
+        for i, r in enumerate(vec_results):
+            r["_leg"] = "vector"
+            r["_rank"] = i
+
+        # Merge with existing candidates via RRF
+        merged = _rrf_fuse(candidates, vec_results)
+        logger.debug(
+            "Vector rerank: %d candidates -> %d merged",
+            len(candidates), len(merged),
+        )
+        return merged
+
+    except Exception as e:
+        logger.debug("Vector rerank failed (non-fatal): %s", e)
+        return candidates
+
+
+# ---------------------------------------------------------------------------
+# Extract & Separate — dynamic routing
+# ---------------------------------------------------------------------------
+
+
+async def _extract_and_separate(
+    fused_memories: list[dict],
+    entity_results: list[dict],
+    query_text: str,
+    limit: int,
+    offset: int,
+    db: Any,
+) -> dict:
+    """Route each result to the appropriate response section dynamically."""
+
+    pinned: list[dict] = []
+    hypotheses: list[dict] = []
+    regular: list[dict] = []
+
+    # --- Pass 1: Separate pinned and hypotheses ---
+    for mem in fused_memories:
+        salience = mem.get("salience", 0)
+        confidence = mem.get("confidence", 0.8)
+
+        if salience >= PINNED_THRESHOLD and len(pinned) < MAX_PINNED:
+            pinned.append(_format_pinned(mem))
+        elif confidence < HYPOTHESIS_THRESHOLD:
+            hypotheses.append(_format_hypothesis(mem))
+        else:
+            regular.append(mem)
+
+    # --- Pass 2: Check for book insights ---
+    book_insights: list[dict] = []
+    regular_non_book: list[dict] = []
+
+    if regular:
+        book_mem_ids = await _find_book_linked_memories(
+            [str(m["id"]) for m in regular if m.get("id")], db
+        )
+        for mem in regular:
+            mid = str(mem.get("id", ""))
+            if mid in book_mem_ids:
+                book_insights.append(
+                    _format_book_insight(mem, book_mem_ids[mid])
+                )
+            else:
+                regular_non_book.append(mem)
+    else:
+        regular_non_book = regular
+
+    # --- Pass 3: Apply offset + limit, then group by category ---
+    paginated = regular_non_book[offset:offset + limit]
+
+    # Enrich top results with graph context
+    enriched_top = await _enrich_with_graph(paginated[:TOP_N_ENRICH], db)
+    paginated = enriched_top + paginated[TOP_N_ENRICH:]
+
+    # Group by category
+    memories_grouped: dict[str, list[dict]] = {}
+    by_category: dict[str, int] = {}
+
+    for mem in paginated:
+        cat = mem.get("category", "context")
+        formatted = _format_memory(mem)
+        if cat not in memories_grouped:
+            memories_grouped[cat] = []
+        memories_grouped[cat].append(formatted)
+        by_category[cat] = by_category.get(cat, 0) + 1
+
+    # Sort categories — self first, then by CATEGORY_ORDER
+    sorted_memories: dict[str, list[dict]] = {}
+    for cat in CATEGORY_ORDER:
+        if cat in memories_grouped:
+            sorted_memories[cat] = memories_grouped[cat]
+    # Add any categories not in CATEGORY_ORDER
+    for cat in memories_grouped:
+        if cat not in sorted_memories:
+            sorted_memories[cat] = memories_grouped[cat]
+
+    # --- Build response (only include non-empty sections) ---
+    response: dict[str, Any] = {}
+
+    if entity_results:
+        response["entities_matched"] = entity_results
+    if pinned:
+        response["pinned"] = pinned
+    if sorted_memories:
+        response["memories"] = sorted_memories
+    if book_insights:
+        response["book_insights"] = book_insights
+    if hypotheses:
+        response["hypotheses"] = hypotheses
+
+    # --- Build meta ---
+    has_more = len(regular_non_book) > offset + limit
+    sections = [
+        k for k in [
+            "entities_matched", "pinned", "memories",
+            "book_insights", "hypotheses",
+        ]
+        if k in response
+    ]
+
+    # Count results per leg
+    search_legs: dict[str, int] = {}
+    for mem in fused_memories:
+        leg = mem.get("_leg", "unknown")
+        search_legs[leg] = search_legs.get(leg, 0) + 1
+
+    # Drill-down actions
+    drill_down = (
+        build_category_drill_down(query_text, by_category)
+        if query_text
+        else []
+    )
+
+    return attach_meta(
+        response,
+        actions_context={
+            "type": "search",
+            "entity_id": entity_results[0]["id"] if entity_results else None,
+            "memory_id": None,
+            "neighbor_count": 0,
+        },
+        by_category=by_category,
+        total_found=len(fused_memories),
+        returned=sum(len(v) for v in sorted_memories.values()) if sorted_memories else 0,
+        offset=offset,
+        has_more=has_more,
+        sections=sections,
+        search_legs=search_legs,
+        vector_rerank=any(m.get("_leg") == "vector" for m in fused_memories),
+        drill_down=drill_down,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
+
+
+def _format_memory(mem: dict) -> dict:
+    """Format a fused memory into the agent-facing format with graph and actions."""
+    mid = str(mem.get("id", ""))
+    return {
+        "id": mid,
+        "content": mem.get("content", ""),
+        "relevance": round(mem.get("_rrf_score", 0), 4),
+        "salience": mem.get("salience", 0),
+        "found_by": mem.get("_leg", "unknown"),
+        "age": _format_age(mem.get("created_at")),
+        "graph": mem.get("_graph", {"entities": [], "related": [], "from_book": None}),
+        "actions": build_memory_actions(mid),
+    }
+
+
+def _format_pinned(mem: dict) -> dict:
+    """Format a high-salience pinned memory."""
+    return {
+        "id": str(mem.get("id", "")),
+        "content": mem.get("content", ""),
+        "category": mem.get("category", ""),
+        "salience": mem.get("salience", 0),
+        "age": _format_age(mem.get("created_at")),
+    }
+
+
+def _format_hypothesis(mem: dict) -> dict:
+    """Format a low-confidence hypothesis memory."""
+    mid = str(mem.get("id", ""))
+    return {
+        "id": mid,
+        "content": mem.get("content", ""),
+        "confidence": mem.get("confidence", 0),
+        "evidence_type": mem.get("evidence_type", ""),
+        "category": mem.get("category", ""),
+        "actions": {
+            "verify": {
+                "tool": "qmemory_correct",
+                "args": {"memory_id": mid, "action": "update"},
+            },
+        },
+    }
+
+
+def _format_book_insight(mem: dict, book_info: dict) -> dict:
+    """Format a memory that's linked to a book."""
+    mid = str(mem.get("id", ""))
+    book_id = book_info.get("book_id", "")
+    section = mem.get("section")
+    return {
+        "id": mid,
+        "content": mem.get("content", ""),
+        "book": {"id": book_id, "title": book_info.get("title", "")},
+        "section": section,
+        "relevance": round(mem.get("_rrf_score", 0), 4),
+        "actions": build_book_insight_actions(book_id, section),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Book-link detection (batch)
+# ---------------------------------------------------------------------------
+
+
+async def _find_book_linked_memories(
+    memory_ids: list[str], db: Any
+) -> dict[str, dict]:
+    """Check which memories have from_book edges.
+
+    Returns {memory_id: {book_id, title}}.
+    """
+    if not memory_ids:
+        return {}
+
+    result: dict[str, dict] = {}
+
+    for mid in memory_ids:
+        surql = """
+        SELECT out.id AS book_id, out.name AS title
+        FROM relates
+        WHERE in = <record>$mid AND type = "from_book"
+        LIMIT 1;
+        """
+        rows = await query(db, surql, {"mid": mid})
+        if rows and isinstance(rows, list) and len(rows) > 0:
+            row = rows[0]
+            if isinstance(row, dict) and row.get("book_id"):
+                result[mid] = {
+                    "book_id": str(row["book_id"]),
+                    "title": row.get("title", ""),
+                }
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Graph enrichment (attaches _graph to each memory)
+# ---------------------------------------------------------------------------
+
+
+async def _enrich_with_graph(
+    memories: list[dict], db: Any
+) -> list[dict]:
+    """Attach graph context (entities, related memories) to top results."""
+    if not memories:
+        return memories
+
+    enriched = list(memories)
+
+    for i, mem in enumerate(enriched):
+        mid = str(mem.get("id", ""))
+        if not mid:
+            continue
+
+        try:
+            surql = f"""
+            SELECT
                 ->relates->entity.{{id, name, type}} AS out_entities,
-                <-relates<-memory.{{id, content, category}} AS in_memories,
-                <-relates<-entity.{{id, name, type}} AS in_entities
-            FROM {tid}
+                <-relates<-entity.{{id, name, type}} AS in_entities,
+                ->relates.{{type, out}} AS out_edges,
+                <-relates.{{type, in}} AS in_edges,
+                ->relates->memory.{{id, content}} AS out_memories,
+                <-relates<-memory.{{id, content}} AS in_memories
+            FROM {mid}
             """
-            enrichment_rows = await query(db, enrichment_surql)
-            if enrichment_rows and isinstance(enrichment_rows, list):
-                for row in enrichment_rows:
-                    if isinstance(row, dict) and row.get("id"):
-                        enrichment_map[str(row["id"])] = row
-
-        # Attach connection hints to top N results
-        enriched_results = list(results)
-
-        for i, mem in enumerate(enriched_results[:TOP_N_ENRICH]):
-            mem_id = str(mem.get("id", ""))
-            connections = enrichment_map.get(mem_id, {})
-
-            out_memories = connections.get("out_memories") or []
-            out_entities = connections.get("out_entities") or []
-            in_memories = connections.get("in_memories") or []
-            in_entities = connections.get("in_entities") or []
-            all_links = out_memories + out_entities + in_memories + in_entities
-
-            valid_links = []
-            seen_targets: set[str] = set()
-            for link in all_links:
-                if not isinstance(link, dict):
-                    continue
-                link_id = str(link.get("id", ""))
-                if link_id and link_id not in seen_targets:
-                    seen_targets.add(link_id)
-                    valid_links.append(link)
-
-            if not valid_links:
+            rows = await query(db, surql)
+            if not rows or not isinstance(rows, list) or len(rows) == 0:
                 continue
 
-            hints = []
-            for link in valid_links[:MAX_HINTS_PER_RESULT]:
-                target_name = link.get("name") or (link.get("content") or "")[:80]
-                hints.append({
-                    "type": "relates",
-                    "target": str(link.get("id", "")),
-                    "target_name": target_name,
+            data = rows[0] if isinstance(rows[0], dict) else {}
+
+            # Build edge type map
+            edge_type_map: dict[str, str] = {}
+            for edge in (data.get("out_edges") or []):
+                if isinstance(edge, dict):
+                    edge_type_map[str(edge.get("out", ""))] = edge.get("type", "relates")
+            for edge in (data.get("in_edges") or []):
+                if isinstance(edge, dict):
+                    edge_type_map[str(edge.get("in", ""))] = edge.get("type", "relates")
+
+            # Build entity list
+            entities: list[dict] = []
+            seen_entities: set[str] = set()
+            for e in (data.get("out_entities") or []) + (data.get("in_entities") or []):
+                if not isinstance(e, dict) or not e.get("id"):
+                    continue
+                eid = str(e["id"])
+                if eid in seen_entities:
+                    continue
+                seen_entities.add(eid)
+                entities.append({
+                    "id": eid,
+                    "name": e.get("name", ""),
+                    "edge": edge_type_map.get(eid, "relates"),
                 })
 
-            enriched_results[i] = {
+            # Build related memories list
+            related: list[dict] = []
+            seen_mems: set[str] = set()
+            for m in (data.get("out_memories") or []) + (data.get("in_memories") or []):
+                if not isinstance(m, dict) or not m.get("id"):
+                    continue
+                rid = str(m["id"])
+                if rid in seen_mems or rid == mid:
+                    continue
+                seen_mems.add(rid)
+                related.append({
+                    "id": rid,
+                    "preview": (m.get("content") or "")[:80],
+                    "edge": edge_type_map.get(rid, "relates"),
+                })
+                if len(related) >= MAX_HINTS_PER_RESULT:
+                    break
+
+            enriched[i] = {
                 **mem,
-                "connections": {
-                    "total": len(valid_links),
-                    "hints": hints,
+                "_graph": {
+                    "entities": entities,
+                    "related": related,
+                    "from_book": None,
                 },
             }
 
-        return enriched_results
+        except Exception as ex:
+            logger.debug(
+                "Graph enrichment failed for %s (non-fatal): %s", mid, ex
+            )
 
-    except Exception as e:
-        logger.debug("Search enrichment failed (non-fatal): %s", e)
-        return results
+    return enriched
