@@ -85,6 +85,7 @@ DEFINE INDEX IF NOT EXISTS idx_memory_evidence_type ON memory FIELDS evidence_ty
 DEFINE INDEX IF NOT EXISTS idx_memory_recall_count  ON memory FIELDS recall_count;
 DEFINE INDEX IF NOT EXISTS idx_memory_source_person ON memory FIELDS source_person;
 DEFINE INDEX IF NOT EXISTS idx_memory_section ON memory FIELDS section;
+DEFINE INDEX IF NOT EXISTS idx_memory_source_type ON memory FIELDS source_type;
 
 -- HNSW vector index — I16 saves 75% RAM vs F64 default, <1% recall loss
 -- SurrealDB auto-quantizes float embeddings to I16 internally
@@ -111,6 +112,10 @@ DEFINE FIELD IF NOT EXISTS updated_at       ON entity TYPE datetime       DEFAUL
 DEFINE INDEX IF NOT EXISTS idx_entity_name ON entity FIELDS name;
 DEFINE INDEX IF NOT EXISTS idx_entity_type ON entity FIELDS type;
 DEFINE INDEX IF NOT EXISTS idx_entity_external ON entity FIELDS external_source, external_id;
+
+-- BM25 fulltext on entity names (enables Entity Leg search)
+DEFINE INDEX IF NOT EXISTS idx_entity_name_ft ON entity
+  FIELDS name FULLTEXT ANALYZER qmemory_analyzer;
 
 -- HNSW vector index — matches memory table config
 DEFINE INDEX IF NOT EXISTS idx_entity_embedding ON entity
@@ -158,6 +163,7 @@ DEFINE FIELD IF NOT EXISTS created_at        ON relates TYPE datetime      DEFAU
 
 DEFINE INDEX IF NOT EXISTS idx_relates_type ON relates FIELDS type;
 DEFINE INDEX IF NOT EXISTS idx_relates_type_in ON relates FIELDS type, in;
+DEFINE INDEX IF NOT EXISTS idx_relates_type_out ON relates FIELDS type, out;
 DEFINE INDEX IF NOT EXISTS idx_relates_created_by ON relates FIELDS created_by;
 
 -- ============================================================
