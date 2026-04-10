@@ -65,8 +65,8 @@ These four problems are coupled. Multi-user requires the operations table so too
 | **D6** | **Rename `main` → `user_qusai` via export/import**, not in-place rename. | SurrealDB has no atomic rename at database level; export/import is the canonical migration path. |
 | **D7** | **Dedicated Railway worker service** (not in-process asyncio). | Isolates worker LLM spend from HTTP responsiveness. User explicitly chose this. |
 | **D8** | **Admin database** `qmemory.admin` holds only the `user` table. Every other table lives in per-user DBs. | Clean separation; one query per request to resolve user → DB name; cheap. |
-| **D9** | **user_code format:** `{adjective}-{5 lowercase base32 chars}`. Example: `calm-k7m3p`. ~100-word adjective list. | Human-readable, memorable, collision-rate << 1 per million for our scale. |
-| **D10** | **stdio transport stays single-user.** Reads DB name from `QMEMORY_SURREAL_DB` env var. No user routing in stdio mode. | Local Claude Code use doesn't have an HTTP request context. Simpler. |
+| **D9** | **user_code format:** `{word}-{5 lowercase base32 chars}`. Words sourced from the [EFF long word list](https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt) (7776 entries, public domain, Diceware-quality). Pre-filtered to remove obviously-negative tone words (`abrasive`, `abrupt`, `absurd`, etc. — curated exclusion list committed as `qmemory/app/excluded_words.txt`). Example: `abacus-k7m3p`, `zoology-k7m3p`. | User choice: scale + public-domain provenance beat branded aesthetics. 7000+ post-filter words = collision-rate ~10⁻⁷ even with thousands of users. |
+| **D10** | **stdio transport is for local dev/testing only.** Qusai (and all other users) use the HTTP remote URL via Claude Code's `claude mcp add --transport http https://mem0.qusai.org/mcp/u/{code}/`. Stdio still reads DB name from `QMEMORY_SURREAL_DB` env var for integration tests and local development. | Unifies to one transport for daily use. Same user, same data, whether talking to Claude Code or Claude.ai. |
 
 ---
 
@@ -440,18 +440,45 @@ async def provision_user_db(user_code: str, display_name: str) -> str:
 
 #### 2.3 User code generator
 
-New file: `qmemory/app/user_code.py`
+New files:
+- `qmemory/app/wordlist.py` — bundles the EFF long word list at build time
+- `qmemory/app/user_code.py` — generator
 
 ```python
-# Committed list of ~100 curated positive-tone adjectives.
-# Example starter set; final list to be decided during implementation (see open question §8.1).
-ADJECTIVES = ["calm", "bold", "swift", "bright", "deep", "warm", "keen", "quick", "wise", "kind"]
+# qmemory/app/wordlist.py
+# Source: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+# License: Creative Commons Attribution 3.0
+# 7776 dice-numbered English words. We load, strip dice numbers, then
+# filter out ~200 obviously-negative words (committed exclusion list).
+
+from pathlib import Path
+
+_EFF_PATH = Path(__file__).parent / "data" / "eff_large_wordlist.txt"
+_EXCLUDED_PATH = Path(__file__).parent / "data" / "excluded_words.txt"
+
+def load_wordlist() -> list[str]:
+    """Load the EFF long list, strip dice numbers, apply exclusion filter."""
+    excluded = {w.strip() for w in _EXCLUDED_PATH.read_text().splitlines() if w.strip()}
+    words = []
+    for line in _EFF_PATH.read_text().splitlines():
+        # Format: "11111\tabacus" — tab-separated dice number + word
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[1] not in excluded:
+            words.append(parts[1])
+    return words
+
+WORDLIST = load_wordlist()    # ~7500 words after exclusion
+```
+
+```python
+# qmemory/app/user_code.py
+import secrets, string
+from qmemory.app.wordlist import WORDLIST
 
 def generate_user_code() -> str:
-    import secrets, string
-    adj = secrets.choice(ADJECTIVES)
+    word = secrets.choice(WORDLIST)
     suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(5))
-    return f"{adj}-{suffix}"
+    return f"{word}-{suffix}"
 
 async def generate_unique_user_code(max_attempts: int = 10) -> str:
     for _ in range(max_attempts):
@@ -460,8 +487,10 @@ async def generate_unique_user_code(max_attempts: int = 10) -> str:
             existing = await query(db, "SELECT id FROM user WHERE user_code = $code", {"code": code})
         if not existing:
             return code
-    raise RuntimeError("Could not generate unique user code after 10 attempts — adjective list exhausted?")
+    raise RuntimeError("Could not generate unique user code after 10 attempts — word list exhausted?")
 ```
+
+**Exclusion list curation:** hand-review the EFF list once, remove words with clearly negative connotations (`abrasive`, `abrupt`, `absurd`, `abuse`, `accuse`, `ache`, `acrid`, etc.). Target: ~200 exclusions, leaving 7500+ words. Committed as `qmemory/app/data/excluded_words.txt` for auditability.
 
 #### 2.4 DB client context routing
 
@@ -857,21 +886,21 @@ Ordered:
 
 ---
 
-## 8. Open questions
+## 8. Resolved decisions (previously open)
 
-1. **Adjective list source.** Do you want a curated list (~100 adjectives, all "positive" tone) or a longer public domain word list? Curated is safer and feels more branded ("calm-k7m3p" is nicer than "abrasive-k7m3p").
+All five were answered on 2026-04-10 before implementation started. Baked into D9, D10, and the phase plan.
 
-2. **Signup friction.** Should signup require an email (for recovery if the URL is lost) or nothing at all? Zero friction = URL-is-everything, lose it = lose data. Email adds one field but enables future "resend my URL" UX.
+1. **Word list source → EFF long word list (7776 words), with ~200 negative-tone exclusions pre-filtered.** Scale and public-domain provenance over branded curation. See D9 and Phase 2.3 for the loader + filter. Committed exclusion list at `qmemory/app/data/excluded_words.txt`.
 
-3. **Books — shared or per-user?** Currently the 71 books live in `main`. After migration they'll live in `user_qusai` and be invisible to other users. Options:
-   - (a) Keep per-user: each new user starts empty. Books copied on request.
-   - (b) Shared read-only books DB: all users see the same books via cross-DB query. More complex.
-   - (c) Seed copy on signup: each new user's DB gets a copy of the books on provision. Simple, but duplicates storage.
-   Default in this spec: **(a)**. Books are Qusai's personal knowledge for now.
+2. **Signup friction → zero.** Signup asks only for display name. Returns the personal URL. Lose the URL = lose the data. Documented warning on `/signup` and `/connect`. Future "send me my URL" flow deferred indefinitely — DHH-approved for friends-and-family scale. No mailer setup, no account system.
 
-4. **Admin CLI for user management.** Do we need `qmemory admin list-users`, `qmemory admin deactivate <code>`, `qmemory admin rotate-code <code>`? Not in this spec, but worth flagging.
+3. **Books → per-user, stay with Qusai.** The 71 books + 8,500 insights migrate only to `user_qusai`. New users start with empty book libraries. No shared DB, no seeding on signup, no cross-DB queries. Respects these as Qusai's curated research. A future "import books from source" action can be added if friends ask, but not in this spec.
 
-5. **Claude Code stdio — which DB by default?** The spec says it reads `QMEMORY_SURREAL_DB` env var. On Qusai's machine this should be `user_qusai` post-migration. Is there any case where local Claude Code would want to use the admin DB? Probably no — admin queries happen via `get_admin_db()` explicitly.
+4. **Admin CLI → minimal only.** Four commands ship: `admin create-db`, `admin create-user`, `admin list-users`, `admin status`. Everything else (deactivate, rotate, export, delete) is deferred until felt. YAGNI applied.
+
+5. **Stdio default DB → doesn't matter for Qusai's daily use.** Qusai will use the HTTP remote URL (`mem0.qusai.org/mcp/u/qusai/`) from Claude Code via `claude mcp add --transport http`, not stdio with a direct SurrealDB connection. Stdio mode remains available for integration tests and local dev; it reads `QMEMORY_SURREAL_DB` env var with no default. See D10.
+
+**Consequence of #5:** the "dual transport, dual logic" cognitive overhead of the current codebase evaporates. Every real user — Qusai included — talks to the same HTTP endpoint, goes through the same middleware, gets the same isolation. stdio is just a developer tool.
 
 ---
 
