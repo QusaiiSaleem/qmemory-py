@@ -94,6 +94,35 @@ async def get_db(namespace: str | None = None, database: str | None = None):
             pass
 
 
+@asynccontextmanager
+async def get_admin_db(database: str = "admin"):
+    """Connect to the qmemory.admin database (never uses _user_db).
+
+    This helper exists so the signup flow, admin CLI, MCP user middleware,
+    and worker loop can all reach the admin routing table without getting
+    routed to a per-user DB by accident.
+
+    Args:
+        database: Usually "admin". Pass a different name in tests
+                  (e.g. "admin_test") to avoid stomping production.
+    """
+    settings = get_settings()
+    db = AsyncSurreal(settings.surreal_url)
+    try:
+        await db.connect()
+        await db.signin({
+            "username": settings.surreal_user,
+            "password": settings.surreal_pass,
+        })
+        await db.use(settings.surreal_ns, database)
+        yield db
+    finally:
+        try:
+            await db.close()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Query
 # ---------------------------------------------------------------------------
@@ -301,3 +330,22 @@ async def apply_schema(db: Any) -> None:
         await db.query(schema_sql)
 
     logger.info("Schema applied successfully")
+
+
+async def apply_admin_schema(db: Any) -> None:
+    """Apply the admin schema (user table only) to the connected database.
+
+    Used by the multi-user setup to provision the tiny routing directory
+    at qmemory.admin. Does NOT apply the base memory schema — admin is
+    a minimal directory, not a memory graph.
+
+    Args:
+        db: An active SurrealDB connection (from get_admin_db()).
+    """
+    schema_path = Path(__file__).parent / "admin_schema.surql"
+    if not schema_path.exists():
+        raise FileNotFoundError(f"admin_schema.surql not found at {schema_path}")
+
+    surql = schema_path.read_text(encoding="utf-8")
+    logger.info("Applying admin schema from %s", schema_path.name)
+    await db.query(surql)
