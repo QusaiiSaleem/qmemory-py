@@ -16,6 +16,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -53,9 +54,16 @@ mcp = FastMCP(
     ),
     stateless_http=True,
     json_response=True,
-    # Sub-app's internal route lives at / so mounting at /mcp gives a
-    # clean /mcp/ URL (not /mcp/mcp/). Matches the pre-rebuild behavior.
+    # Sub-app's internal route lives at / so mounting at /_mcp gives a
+    # clean /_mcp/ URL (not /_mcp/mcp/).
     streamable_http_path="/",
+    # Disable FastMCP's DNS rebinding protection. Railway's edge validates
+    # Host headers for us; FastMCP's built-in check auto-enables an
+    # allowlist of 127.0.0.1/localhost/[::1] when host="127.0.0.1" (our
+    # binding) and rejects mem0.qusai.org with HTTP 421.
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
 )
 
 mount_operations(mcp, OPERATIONS)
