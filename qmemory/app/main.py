@@ -14,7 +14,7 @@ import logging
 import time
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from mcp.server.fastmcp import FastMCP
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -147,5 +147,21 @@ async def health_check():
     }
 
 
+@api.api_route("/mcp/", methods=["GET", "POST"], include_in_schema=False)
+async def legacy_mcp_root(request: Request):
+    """Legacy /mcp/ endpoint - now requires /mcp/u/{code}/. Returns 410 Gone."""
+    return JSONResponse(
+        {
+            "error": "gone",
+            "message": (
+                "This endpoint has moved. Use your personal URL at "
+                "/mcp/u/{your_user_code}/"
+            ),
+            "signup": "https://mem0.qusai.org/signup",
+        },
+        status_code=410,
+    )
+
+
 api.mount("/mcp", mcp_app)
-logger.info("Qmemory Cloud app created - MCP mounted at /mcp/ (no auth yet)")
+logger.info("Qmemory Cloud app created - legacy /mcp/ returns 410, /mcp/u/{code}/ is live")
