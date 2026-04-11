@@ -215,14 +215,32 @@ async def _content_leg(
     entity_id: str | None,
     db: Any,
 ) -> list[dict]:
-    """BM25 fulltext search on memory.content."""
-    params: dict[str, Any] = {
-        "query": query_text,
-        "limit": min(limit, CONTENT_LEG_LIMIT),
-    }
+    """BM25 fulltext search on memory.content.
+
+    SurrealDB v3 has TWO bugs that compound here:
+
+    1. `search::score(0)` always returns 0.0 — there's no server-side
+       BM25 relevance ranking we can sort by.
+    2. `WHERE content @@ $param` returns WRONG rows when the query text
+       is bound via a parameter. The same query as a literal string
+       (`@@ "..."`) returns the correct rows. Verified directly against
+       production: parameterized form returned 0 NCNP-related rows for
+       "الاستراتيجية الوطنية" while the literal form returned all 28.
+
+    Workaround: inline the query text as a properly-escaped literal so
+    we can actually find the matching rows. Then re-rank in Python by
+    term frequency (count of query token occurrences in content) since
+    we can't get scores from the server.
+
+    Limit: fetch a wide pool (CONTENT_LEG_LIMIT, default 50) for RRF
+    fusion to work with. Don't cap at the user's per-page limit.
+    """
+    params: dict[str, Any] = {"limit": CONTENT_LEG_LIMIT}
     params.update(filters["params"])
 
-    # Optional entity_id scope — only memories linked to this entity
+    # Inline the query text as an escaped literal — see workaround note above.
+    escaped_query = _escape_surql_string(query_text)
+
     entity_clause = ""
     if entity_id:
         entity_clause = (
@@ -232,12 +250,11 @@ async def _content_leg(
 
     surql = f"""
     SELECT {MEMORY_FIELDS} FROM memory
-    WHERE content @@ $query
+    WHERE content @@ "{escaped_query}"
         AND is_active = true
         AND (valid_until IS NONE OR valid_until > time::now())
         {entity_clause}
         {filters["clauses"]}
-    ORDER BY salience DESC
     LIMIT $limit;
     """
 
@@ -245,17 +262,62 @@ async def _content_leg(
     if not results or not isinstance(results, list):
         return []
 
-    # Compute word-overlap relevance (search::score() broken in SurrealDB v3)
-    query_words = set(query_text.lower().split())
-    for i, r in enumerate(results):
+    # Python-side ranking by term frequency. Robust to Arabic punctuation
+    # and stemming because it counts substring occurrences, not whole-token
+    # matches. Heavy weight on relevance, salience as tiebreaker.
+    query_tokens = [
+        t for t in _tokenize_for_relevance(query_text)
+        if len(t) >= 2
+    ]
+    for r in results:
+        content_lower = (r.get("content") or "").lower()
+        # Sum of substring occurrences for each query token. A memory that
+        # contains the full phrase scores higher than one with just one word.
+        tf = sum(content_lower.count(t) for t in query_tokens)
         r["_leg"] = "content"
-        r["_rank"] = i
-        content_words = set((r.get("content") or "").lower().split())
-        overlap = len(query_words & content_words)
-        r["_bm25_relevance"] = min(1.0, overlap / max(len(query_words), 1))
+        r["_bm25_relevance"] = min(1.0, tf / max(len(query_tokens) * 2, 1))
+        r["_term_freq"] = tf
 
-    logger.debug("Content leg: %d results", len(results))
+    # Sort by term frequency DESC, then salience DESC as tiebreaker.
+    results.sort(
+        key=lambda r: (
+            r.get("_term_freq", 0),
+            r.get("salience", 0) or 0,
+        ),
+        reverse=True,
+    )
+    for i, r in enumerate(results):
+        r["_rank"] = i
+
+    logger.debug(
+        "Content leg: %d results (top tf=%d)",
+        len(results),
+        results[0].get("_term_freq", 0) if results else 0,
+    )
     return results
+
+
+def _tokenize_for_relevance(text: str) -> list[str]:
+    """Lowercase + split on whitespace + strip surrounding punctuation.
+
+    Used only by the Python-side relevance scoring in _content_leg. We
+    don't try to do stem extraction here (the BM25 index already does
+    that on the SQL side); we just want a clean list of tokens to feed
+    `content.count(token)` substring counts.
+    """
+    raw = text.lower().split()
+    return [t.strip(".,!?:;()[]{}\"'`—–-…") for t in raw if t.strip(".,!?:;()[]{}\"'`—–-…")]
+
+
+def _escape_surql_string(s: str) -> str:
+    """Escape a string for inline use in a SurrealQL double-quoted literal.
+
+    Required because SurrealDB v3's `WHERE content @@ $param` form returns
+    wrong rows for fulltext search; only the literal form `@@ "..."` works
+    correctly. We escape backslash and double-quote, the only metacharacters
+    that can break out of a double-quoted SurrealQL string.
+    """
+    return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
 # ---------------------------------------------------------------------------
