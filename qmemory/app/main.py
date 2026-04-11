@@ -1,15 +1,8 @@
 """
-Qmemory Cloud — FastAPI + FastMCP HTTP Server
+Qmemory Cloud — FastAPI + FastMCP HTTP Server.
 
-This is the HTTP entry point for Qmemory Cloud. It creates:
-  1. A FastMCP server with the same 10 tools as qmemory/mcp/server.py
-  2. A FastAPI app with auth pages (login, signup, logout)
-  3. Session-based auth using signed cookies (SessionMiddleware)
-  4. Mounts the FastMCP server at /mcp/ inside the FastAPI app
-
-The existing qmemory/mcp/server.py stays untouched — it handles stdio
-transport for Claude Code. This file handles HTTP transport for
-Claude.ai and other HTTP-based MCP clients.
+HTTP entry point for Qmemory Cloud. Tool definitions live in
+qmemory/mcp/operations.py. Mounts the FastMCP HTTP sub-app at /mcp.
 
 Run with:
     uv run uvicorn qmemory.app.main:api --port 3777
@@ -17,13 +10,13 @@ Run with:
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
-import fastmcp
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from mcp.server.fastmcp import FastMCP
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from qmemory.app.config import get_app_settings
@@ -33,25 +26,22 @@ from qmemory.app.routes.dashboard import router as dashboard_router
 from qmemory.app.routes.memories import router as memories_router
 from qmemory.app.routes.tokens import router as tokens_router
 from qmemory.db.client import is_healthy
-
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
+from qmemory.mcp.operations import OPERATIONS
+from qmemory.mcp.registry import mount_operations
 
 logger = logging.getLogger(__name__)
 
-# Configure root logger for structured output when running as main app
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 
 # ---------------------------------------------------------------------------
-# FastMCP server — same 7 tools as qmemory/mcp/server.py
+# FastMCP server — same OPERATIONS as stdio
 # ---------------------------------------------------------------------------
 
-mcp = fastmcp.FastMCP(
-    "Qmemory",
+mcp = FastMCP(
+    "qmemory_mcp",
     instructions=(
         "Graph memory for AI agents. "
         "Call qmemory_bootstrap first to load your full memory context. "
@@ -60,605 +50,81 @@ mcp = fastmcp.FastMCP(
         "create relationships between knowledge nodes, and qmemory_person to "
         "manage person entities."
     ),
+    stateless_http=True,
+    json_response=True,
+    # Sub-app's internal route lives at / so mounting at /mcp gives a
+    # clean /mcp/ URL (not /mcp/mcp/). Matches the pre-rebuild behavior.
+    streamable_http_path="/",
 )
 
+mount_operations(mcp, OPERATIONS)
 
 # ---------------------------------------------------------------------------
-# Tool 1: qmemory_bootstrap (read-only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_bootstrap(session_key: str = "default") -> str:
-    """Load your full memory context for this session.
-
-    Call this at the START of every conversation to remember who you are
-    and what you know. Returns your self-model, cross-session memories
-    grouped by category, graph map, and session info.
-
-    Args:
-        session_key: Identifies this session context. Use the channel/topic
-                     name if available (e.g. "telegram/topic:7"), otherwise
-                     leave as "default".
-
-    Returns a formatted text block injected into your context window.
-    """
-    start = time.monotonic()
-    logger.info("Tool call: qmemory_bootstrap(session_key=%s)", session_key)
-
-    from qmemory.core.recall import assemble_context
-
-    result = await assemble_context(session_key)
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_bootstrap completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 2: qmemory_search (read-only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_search(
-    query: str | None = None,
-    category: str | None = None,
-    scope: str | None = None,
-    limit: int = 10,
-    offset: int = 0,
-    after: str | None = None,
-    before: str | None = None,
-    include_tool_calls: bool = False,
-    source_type: str | None = None,
-    entity_id: str | None = None,
-) -> str:
-    """Search cross-session memory by meaning, category, or scope.
-
-    Returns memories from ALL past conversations, grouped by category,
-    with graph context and structured next-step actions.
-
-    Args:
-        query:             Free-text search query (multi-leg BM25).
-                           Leave empty to get recent memories without text search.
-        category:          Filter to one category (HARD filter — excludes others):
-                           self, style, preference, context, decision,
-                           idea, feedback, domain
-        scope:             Filter visibility: global, project:xxx, topic:xxx
-        limit:             Max results to return (default 10, max 50).
-        offset:            Skip first N results for pagination (default 0).
-        after:             Only return memories created after this date.
-                           ISO date string, e.g. "2026-04-01".
-        before:            Only return memories created before this date.
-        include_tool_calls: Also search past tool call history (default False).
-        source_type:       Filter by relation type pointing to the memory.
-                           E.g. "from_book" returns only memories extracted from books.
-        entity_id:         Scope search to memories linked to this entity.
-                           E.g. "entity:ent123abc" — only returns memories about that person/concept.
-
-    Returns JSON with dynamic sections:
-      entities_matched — matched people/concepts with actions
-      pinned — high-salience memories (>= 0.9)
-      memories.{category} — grouped by category, ranked by relevance
-      book_insights — memories linked to books
-      hypotheses — low-confidence memories needing verification
-      actions — suggested next steps
-      meta — counts, sections list, search leg breakdown
-    """
-    start = time.monotonic()
-    logger.info(
-        "Tool call: qmemory_search(query=%s, category=%s, limit=%d, source_type=%s)",
-        query,
-        category,
-        limit,
-        source_type,
-    )
-
-    from qmemory.core.search import search_memories
-
-    results = await search_memories(
-        query_text=query,
-        category=category,
-        scope=scope,
-        limit=limit,
-        offset=offset,
-        after=after,
-        before=before,
-        include_tool_calls=include_tool_calls,
-        source_type=source_type,
-        entity_id=entity_id,
-    )
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_search completed in %.2fs", elapsed)
-    return json.dumps(results, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 2b: qmemory_get (read-only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_get(
-    ids: list[str],
-    include_neighbors: bool = False,
-    neighbor_depth: int = 1,
-) -> str:
-    """Fetch memories or entities by ID with optional graph neighbor traversal.
-
-    Use this to:
-    - Retrieve specific memories when you have their IDs
-    - Explore the graph by following connections from search results
-    - Verify that saved memories exist
-
-    Args:
-        ids:                List of record IDs to fetch.
-                            Examples: ["memory:mem123abc", "entity:ent456xyz"]
-                            Max 20 IDs per call.
-        include_neighbors:  If True, also fetch connected nodes for each result.
-                            Shows what each memory is linked to in the graph.
-        neighbor_depth:     How deep to traverse connections (1 or 2). Default 1.
-
-    Returns JSON with {memories, not_found, actions, meta}.
-    """
-    start = time.monotonic()
-    logger.info("Tool call: qmemory_get(ids=%s, neighbors=%s)", ids[:3], include_neighbors)
-
-    from qmemory.core.get import get_memories
-
-    result = await get_memories(
-        ids=ids,
-        include_neighbors=include_neighbors,
-        neighbor_depth=neighbor_depth,
-    )
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_get completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 3: qmemory_save
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_save(
-    content: str,
-    category: str,
-    salience: float = 0.5,
-    scope: str = "global",
-    confidence: float = 0.8,
-    source_person: str | None = None,
-    evidence_type: str = "observed",
-    context_mood: str | None = None,
-) -> str:
-    """Save a fact to cross-session memory with evidence tracking.
-
-    Runs deduplication automatically — if a similar memory exists it will
-    UPDATE or NOOP instead of creating a duplicate. Returns the action taken.
-
-    Args:
-        content:       The fact to remember. One clear statement.
-                       Example: "Qusai prefers concise bullet points over paragraphs"
-        category:      What type of fact this is:
-                       self       — what the agent knows about itself
-                       style      — communication preferences (tone, format)
-                       preference — general user preferences
-                       context    — facts about projects, orgs, situations
-                       decision   — past decisions made, with rationale
-                       idea       — future plans or proposals
-                       feedback   — user corrections and error reports
-                       domain     — sector/domain knowledge
-        salience:      Importance 0.0-1.0. High-salience memories are recalled first.
-                       0.9+ = critical, 0.7 = important, 0.5 = normal, 0.3 = low
-        scope:         Who can see this: global | project:xxx | topic:xxx
-        confidence:    How certain are you? 0.0-1.0. Use < 0.5 for hypotheses.
-        source_person: Who said this? Pass entity ID (e.g. "ent1234abc") if known.
-        evidence_type: How was this learned?
-                       observed  — you witnessed it directly
-                       reported  — someone told you
-                       inferred  — you deduced it
-                       self      — the agent learned this about itself
-        context_mood:  Situation when this was learned:
-                       calm_decision | heated_discussion | brainstorm |
-                       correction | casual | urgent
-
-    Returns JSON with action (ADD/UPDATE/NOOP), memory_id, and a nudge
-    suggesting which nearby memories to link with qmemory_link.
-    """
-    start = time.monotonic()
-    logger.info(
-        "Tool call: qmemory_save(category=%s, salience=%.2f)",
-        category,
-        salience,
-    )
-
-    from qmemory.core.save import save_memory
-
-    result = await save_memory(
-        content=content,
-        category=category,
-        salience=salience,
-        scope=scope,
-        confidence=confidence,
-        source_person=source_person,
-        evidence_type=evidence_type,
-        context_mood=context_mood,
-    )
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_save completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 4: qmemory_correct
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_correct(
-    memory_id: str,
-    action: str,
-    new_content: str | None = None,
-    updates: dict | None = None,
-    edge_id: str | None = None,
-    reason: str | None = None,
-) -> str:
-    """Fix or delete a memory. Preserves full audit trail via soft-delete.
-
-    We NEVER hard-delete memories — soft-delete only (is_active = false).
-    The "correct" action creates a version chain (prev_version edge) so you
-    can always trace back through a fact's history.
-
-    Args:
-        memory_id:   Full record ID, e.g. "memory:mem1710864000000abc".
-                     Get this from qmemory_search results.
-        action:      What to do:
-                     correct — Replace content. Creates a new version, soft-deletes old.
-                               Requires new_content.
-                     delete  — Soft-delete only. Sets is_active=false. Fact stays in DB.
-                     update  — Change metadata (salience, scope, confidence, etc.)
-                               without creating a new version. Requires updates dict.
-                     unlink  — Remove a relates edge (not the node). Requires edge_id.
-        new_content: The corrected fact text. Required when action="correct".
-        updates:     Metadata fields to change. Required when action="update".
-                     Allowed keys: salience, scope, valid_until, category, confidence.
-                     Example: {"salience": 0.9, "scope": "project:qmemory"}
-        edge_id:     The relates edge ID to delete. Required when action="unlink".
-        reason:      Optional note explaining why this change was made.
-
-    Returns JSON with ok (bool) and details about what changed.
-    """
-    start = time.monotonic()
-    logger.info(
-        "Tool call: qmemory_correct(memory_id=%s, action=%s)",
-        memory_id,
-        action,
-    )
-
-    from qmemory.core.correct import correct_memory
-
-    result = await correct_memory(
-        memory_id=memory_id,
-        action=action,
-        new_content=new_content,
-        updates=updates,
-        edge_id=edge_id,
-        reason=reason,
-    )
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_correct completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 5: qmemory_link
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_link(
-    from_id: str,
-    to_id: str,
-    relationship_type: str,
-    reason: str | None = None,
-    confidence: float | None = None,
-) -> str:
-    """Create a relationship edge between any two nodes in the memory graph.
-
-    This is what turns a flat list of facts into a connected knowledge graph.
-    The relationship type can be ANYTHING meaningful — there is no fixed list.
-    Choose a type that describes WHY these two things are connected.
-
-    Args:
-        from_id:           Source node ID. Examples:
-                           "memory:mem1710864000000abc"
-                           "entity:ent1710864000000xyz"
-        to_id:             Target node ID. Can be a different table type.
-        relationship_type: Any string. Examples:
-                           supports, contradicts, caused_by, depends_on,
-                           belongs_to_topic, has_identity, related_to,
-                           blocks, inspired_by, summarizes, expands_on
-        reason:            Optional note explaining why this connection exists.
-        confidence:        How confident in this connection? 0.0-1.0.
-
-    Returns JSON with edge_id and an exploration nudge.
-    """
-    start = time.monotonic()
-    logger.info(
-        "Tool call: qmemory_link(from=%s, to=%s, type=%s)",
-        from_id,
-        to_id,
-        relationship_type,
-    )
-
-    from qmemory.core.link import link_nodes
-
-    result = await link_nodes(
-        from_id=from_id,
-        to_id=to_id,
-        relationship_type=relationship_type,
-        reason=reason,
-        confidence=confidence,
-    )
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_link completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 6: qmemory_person
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_person(
-    name: str,
-    aliases: list[str] | None = None,
-    contacts: list[dict] | None = None,
-) -> str:
-    """Create or find a person entity with linked identities across systems.
-
-    A person can have multiple contact identities — Telegram, WhatsApp,
-    email, etc. — all linked via has_identity edges. If a person with this
-    name already exists, returns the existing record (no duplicate created).
-
-    Args:
-        name:     The person's display name. Example: "Ahmed Al-Rashid"
-        aliases:  Optional alternative names or nicknames.
-                  Example: ["Ahmed", "Abu Omar"]
-        contacts: Optional list of contact identities. Each dict needs:
-                  - system:  "telegram", "whatsapp", "email", "smartsheet"
-                  - handle:  The identifier in that system (username, email, ID)
-                  Example: [
-                    {"system": "telegram", "handle": "@ahmed_rashid"},
-                    {"system": "email", "handle": "ahmed@example.com"}
-                  ]
-
-    Returns JSON with entity_id, contact_ids, links_created, and
-    action ("created" or "found").
-    """
-    start = time.monotonic()
-    logger.info("Tool call: qmemory_person(name=%s)", name)
-
-    from qmemory.core.person import create_person
-
-    result = await create_person(
-        name=name,
-        aliases=aliases,
-        contacts=contacts,
-    )
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_person completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 7: qmemory_import (stub)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_import(file_path: str) -> str:
-    """Import a markdown file into the memory graph.
-
-    Args:
-        file_path: Absolute path to the markdown file to import.
-
-    Note: Full implementation coming in a future update.
-    """
-    logger.info("Tool call: qmemory_import(file_path=%s)", file_path)
-    return json.dumps(
-        {
-            "status": "not_implemented",
-            "message": "Import is coming in a future update.",
-            "file_path": file_path,
-        },
-        ensure_ascii=False,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Tool 8: qmemory_books (read-only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_books(
-    book_id: str | None = None,
-    section: str | None = None,
-    query: str | None = None,
-) -> str:
-    """Browse books in your knowledge library — 3 levels of detail.
-
-    Level 1 — List all books:
-        qmemory_books()
-        qmemory_books(query="learning")    # search by name
-
-    Level 2 — See a book's sections:
-        qmemory_books(book_id="entity:ent123abc")
-
-    Level 3 — Read a section's content:
-        qmemory_books(book_id="entity:ent123abc", section="Chapter 1")
-
-    Args:
-        book_id:  Book entity ID. Omit to list all books.
-        section:  Section name within a book. Requires book_id.
-        query:    Search books by name (only used when book_id is omitted).
-
-    Returns JSON with books, sections, or chunks depending on the level.
-    """
-    start = time.monotonic()
-    logger.info(
-        "Tool call: qmemory_books(book_id=%s, section=%s, query=%s)",
-        book_id, section, query,
-    )
-
-    from qmemory.core.books import list_books, list_sections, read_section
-
-    if book_id and section:
-        result = await read_section(book_id=book_id, section=section)
-    elif book_id:
-        result = await list_sections(book_id=book_id)
-    else:
-        result = await list_books(query_text=query)
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_books completed in %.2fs", elapsed)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Tool 10: qmemory_health (read-only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def qmemory_health(
-    check: str = "all",
-) -> str:
-    """Check the health of your memory graph.
-
-    Returns the latest health report from the background worker.
-    Shows orphan nodes, stale facts, missing links, data quality issues,
-    and coverage gaps — with suggested actions for each finding.
-
-    Args:
-        check: Which check to show. Options:
-               all            — everything (default)
-               orphans        — nodes with zero connections
-               contradictions — conflicting memories
-               stale          — expired or decayed memories
-               missing_links  — links created by the linker
-               gaps           — categories with few memories
-               quality        — broken edges, empty content
-
-    Returns JSON with summary counts, detailed findings, and actions.
-    """
-    start = time.monotonic()
-    logger.info("Tool call: qmemory_health(check=%s)", check)
-
-    from qmemory.core.health import get_latest_report
-
-    result = await get_latest_report(check=check)
-
-    elapsed = time.monotonic() - start
-    logger.info("qmemory_health completed in %.2fs", elapsed)
-
-    if result is None:
-        return json.dumps({
-            "status": "no_report",
-            "message": "No health report found. Run 'qmemory worker --once' to generate one.",
-        }, ensure_ascii=False)
-    return json.dumps(result, default=str, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# FastAPI app — wraps the FastMCP server + adds /health
+# FastAPI app
 # ---------------------------------------------------------------------------
 
 settings = get_app_settings()
 
-# Create the MCP HTTP sub-app FIRST so we can grab its lifespan.
-# FastMCP's StreamableHTTPSessionManager needs its lifespan to initialize
-# the internal task group that processes MCP JSON-RPC requests.
-# json_response=True lets clients use Accept: application/json (simpler).
-# stateless_http=True means each request is independent (no session tracking).
-# This is the simplest mode for Claude.ai and other HTTP MCP clients.
-mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
+mcp_app = mcp.streamable_http_app()
 
+# FastMCP's streamable_http_app() returns a Starlette instance whose
+# lifespan lives on its router. We pass that to FastAPI so the MCP
+# session manager's task group starts up when the API does.
 api = FastAPI(
     title="Qmemory Cloud",
     version="1.0.0",
-    description="Graph-based memory for AI agents — HTTP API",
+    description="Graph-based memory for AI agents - HTTP API",
     debug=settings.debug,
-    # Pass the MCP app's lifespan so its task group gets initialized.
-    # Without this, MCP requests fail with "Task group is not initialized".
-    lifespan=mcp_app.lifespan,
+    lifespan=mcp_app.router.lifespan_context,
 )
 
 # ---------------------------------------------------------------------------
-# Middleware: signed session cookies (requires itsdangerous)
+# Session middleware (signed cookies)
 # ---------------------------------------------------------------------------
-# SessionMiddleware stores session data in a signed cookie on the client.
-# The secret_key signs the cookie so it can't be tampered with.
-# max_age=604800 means the cookie lasts 7 days (60 * 60 * 24 * 7).
+
 api.add_middleware(
     SessionMiddleware,
     secret_key=settings.secret_key,
     max_age=604800,
     session_cookie="qmemory_session",
     same_site="lax",
-    https_only=False,  # Set to True in production with HTTPS
+    https_only=False,
 )
 
 # ---------------------------------------------------------------------------
-# CORS Middleware — allow Claude.ai and other MCP clients
+# CORS — explicit origin list (credentials + wildcard is broken)
 # ---------------------------------------------------------------------------
-# Claude.ai makes cross-origin requests for OAuth and MCP, so we need
-# to respond to CORS preflight (OPTIONS) with proper headers.
-from starlette.middleware.cors import CORSMiddleware
 
 api.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, you may want to restrict this
+    allow_origins=[
+        "https://claude.ai",
+        "https://claude.com",
+        "https://anthropic.com",
+        "https://www.anthropic.com",
+    ],
+    allow_origin_regex=r"https://.*\.anthropic\.com",
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
     allow_headers=["*"],
     expose_headers=["Mcp-Session-Id"],
-    max_age=86400,  # Cache preflight for 24 hours
+    max_age=86400,
 )
-logger.info("CORS middleware enabled — allowing all origins for OAuth/MCP")
+logger.info("CORS middleware enabled - explicit claude.ai/anthropic.com origins")
 
 # ---------------------------------------------------------------------------
-# Include auth routes (login, signup, logout)
+# Routes
 # ---------------------------------------------------------------------------
+
 api.include_router(auth_router)
 api.include_router(connect_router)
 api.include_router(dashboard_router)
 api.include_router(memories_router)
 api.include_router(tokens_router)
-logger.info("Auth routes included: /login, /signup, /logout")
-logger.info("Connect route included: /connect")
-logger.info("Dashboard route included: /dashboard")
-logger.info("Memory routes included: /memories, /memories/search, /memories/{id}")
-logger.info("Tokens routes included: /tokens, /tokens/generate, /tokens/{id}")
-
-
-# ---------------------------------------------------------------------------
-# Root redirect: / → /dashboard (if logged in) or /login (if not)
-# ---------------------------------------------------------------------------
 
 
 @api.get("/")
 async def root_redirect(request: Request):
-    """Redirect root URL to dashboard or login page."""
     user = get_session_user(request)
     if user:
         return RedirectResponse(url="/dashboard", status_code=302)
@@ -667,28 +133,15 @@ async def root_redirect(request: Request):
 
 @api.get("/health")
 async def health_check():
-    """Check if the server and SurrealDB are reachable."""
     start = time.monotonic()
-    logger.info("Health check requested")
-
     db_ok = await is_healthy()
-
     elapsed = time.monotonic() - start
-    status = "healthy" if db_ok else "degraded"
-    logger.info("Health check: %s (%.2fs)", status, elapsed)
-
     return {
-        "status": status,
+        "status": "healthy" if db_ok else "degraded",
         "database": "connected" if db_ok else "unreachable",
         "response_time_ms": round(elapsed * 1000, 1),
     }
 
 
-# ---------------------------------------------------------------------------
-# Mount MCP — no auth, open access
-# ---------------------------------------------------------------------------
-# MCP is mounted directly without any auth middleware.
-# Anyone with the URL can use the MCP tools.
 api.mount("/mcp", mcp_app)
-
-logger.info("Qmemory Cloud app created — MCP mounted at /mcp/ (no auth)")
+logger.info("Qmemory Cloud app created - MCP mounted at /mcp/ (no auth yet)")
