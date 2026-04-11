@@ -25,6 +25,11 @@ def main():
     pass
 
 
+# Register the admin command group.
+from qmemory.admin.cli import admin_group  # noqa: E402
+main.add_command(admin_group)
+
+
 # ---------------------------------------------------------------------------
 # serve
 # ---------------------------------------------------------------------------
