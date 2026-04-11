@@ -20,6 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from qmemory.app.config import get_app_settings
+from qmemory.app.middleware.user_context import MCPUserMiddleware
 from qmemory.app.routes.auth import get_session_user, router as auth_router
 from qmemory.app.routes.connect import router as connect_router
 from qmemory.app.routes.dashboard import router as dashboard_router
@@ -111,6 +112,9 @@ api.add_middleware(
     max_age=86400,
 )
 logger.info("CORS middleware enabled - explicit claude.ai/anthropic.com origins")
+
+api.add_middleware(MCPUserMiddleware)
+logger.info("MCPUserMiddleware registered - /mcp/u/{code}/ routes are live")
 
 # ---------------------------------------------------------------------------
 # Routes
