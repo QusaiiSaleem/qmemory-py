@@ -42,3 +42,8 @@ asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["qmemory"]
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1.0",
+]
