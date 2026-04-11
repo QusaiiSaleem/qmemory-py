@@ -376,18 +376,44 @@ async def _graph_leg(
 
     # Fetch memories linked to these entities.
     #
-    # Important: traverse FROM the (small) relates edge set OUTWARD instead
-    # of doing `WHERE id IN (subquery)` against the (large) memory table.
-    # The old `id IN (...)` form forced a full memory scan checking each
-    # row against the edge set — for hub entities with many edges this
-    # took 191 seconds in production. The new form fetches the edge rows
-    # first (cheap, indexed by `out`), then dereferences `in.*` to get
-    # the memory records (also indexed). Filtering happens via WHERE on
-    # the dereferenced memory fields.
+    # Performance: traverse FROM the (small) relates edge set OUTWARD
+    # instead of `WHERE id IN (subquery)` against the (large) memory
+    # table. The old `id IN (...)` form forced a full memory scan
+    # checking each row against the edge set — for hub entities with
+    # many edges this took 191 seconds in production.
+    #
+    # Field projection: use the destructuring `.{}` syntax to pull only
+    # the fields in MEMORY_FIELDS (excluding the 1024-float `embedding`
+    # array, which would waste ~120KB per call for 15 results). The
+    # skill's gotcha doc warns against `SELECT *` on memory tables for
+    # exactly this reason.
     all_memories: list[dict] = []
     for eid in entity_ids:
-        mem_surql = f"""
-        SELECT VALUE in.* FROM relates
+        # NOTE: v3 ORDER BY requires every order idiom to appear in the SELECT
+        # clause. We use `in.<field> AS <field>` aliases so the ordered field
+        # `in.salience` is "in selection" while still flattening the record
+        # to top-level keys for the rest of the pipeline.
+        mem_surql = """
+        SELECT
+            in.id AS id,
+            in.content AS content,
+            in.category AS category,
+            in.salience AS salience,
+            in.scope AS scope,
+            in.confidence AS confidence,
+            in.source_type AS source_type,
+            in.evidence_type AS evidence_type,
+            in.is_active AS is_active,
+            in.linked AS linked,
+            in.recall_count AS recall_count,
+            in.last_recalled AS last_recalled,
+            in.context_mood AS context_mood,
+            in.source_person AS source_person,
+            in.prev_version AS prev_version,
+            in.valid_until AS valid_until,
+            in.created_at AS created_at,
+            in.updated_at AS updated_at
+        FROM relates
         WHERE out = <record>$eid
             AND in.is_active = true
             AND (in.valid_until IS NONE OR in.valid_until > time::now())
@@ -397,12 +423,8 @@ async def _graph_leg(
         mem_params: dict[str, Any] = {"eid": eid, "limit": GRAPH_LEG_LIMIT}
         rows = await query(db, mem_surql, mem_params)
         if rows and isinstance(rows, list):
-            # Strip the embedding field (we don't include it in MEMORY_FIELDS
-            # in the old query but `in.*` returns everything). Also drop any
-            # rows that aren't memory records (defensive).
             for row in rows:
                 if isinstance(row, dict) and row.get("id"):
-                    row.pop("embedding", None)
                     all_memories.append(row)
 
     # Tag results
