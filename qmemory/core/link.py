@@ -182,9 +182,19 @@ async def _create_link(
 
     # Build SET clause dynamically — only include optional fields when provided.
     # SurrealDB 3.0 rejects NULL for option<> fields — omit them entirely.
+    #
+    # NOTE: `type` and `created_by` are REQUIRED (non-option) fields in the
+    # production relates schema. `schema.surql` declares DEFAULTs for both,
+    # but `DEFINE FIELD IF NOT EXISTS` no-ops when the field predates the
+    # default, so the production table has no defaults applied. We set them
+    # explicitly on every RELATE to avoid the 'Expected `string` but found
+    # `NONE`' coerce failure that silently broke all manual links between
+    # March 23 and April 11, 2026.
     set_parts = [
+        "type = 'related'",
         "relationship_type = $relationship_type",
         "confidence = $confidence_val",
+        "created_by = 'agent'",
         "created_at = time::now()",
     ]
     params: dict[str, Any] = {

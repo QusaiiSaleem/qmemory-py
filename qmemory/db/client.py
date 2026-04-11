@@ -163,6 +163,24 @@ async def query(
         # Execute the query — the SDK handles parameter binding
         result = await db.query(surql, params)
 
+        # SurrealDB's Python SDK v3 sometimes returns runtime errors as a
+        # bare string value instead of raising. Silently treating those as
+        # "empty result" is what let qmemory_link return fake success edge
+        # IDs for ~19 days. Detect the known error markers and surface them
+        # as None + a loud WARNING log so downstream callers can decide.
+        if isinstance(result, str) and (
+            "Couldn't coerce" in result
+            or "Parse error" in result
+            or "found `NONE`" in result
+            or "There was a problem" in result
+            or "Found " in result and " but expected " in result
+        ):
+            logger.warning(
+                "SurrealDB returned error as string: %s | Query: %s",
+                result[:300], surql[:200],
+            )
+            return None
+
         # Convert any RecordID objects in the result to plain strings
         return normalize_ids(result)
 
