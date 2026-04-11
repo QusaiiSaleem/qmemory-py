@@ -3,570 +3,154 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>qmemory — System Login</title>
-
-    <!-- HTMX for SPA-like behavior -->
-    <script src="https://unpkg.com/htmx.org@2"></script>
-
-    <!-- Google Fonts: JetBrains Mono for terminal feel -->
+    <title>qmemory — Sign in</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
     <style>
         :root {
-            /* The glowing green from your reference */
             --primary-color: #00ffaa;
             --primary-dim: #00cc88;
             --primary-glow: rgba(0, 255, 170, 0.15);
             --primary-glow-strong: rgba(0, 255, 170, 0.4);
-
             --bg-color: #050505;
             --bg-elevated: #0a0a0a;
             --bg-card: rgba(8, 8, 8, 0.9);
-
             --text-muted: #555;
             --text-dim: #888;
             --border-color: #222;
-            --border-focus: #333;
-
-            --dot-size: 2px;
-            --dot-spacing: 6px;
-
-            --error-color: #ff4757;
-            --error-glow: rgba(255, 71, 87, 0.2);
-
-            /* Typography */
-            --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Courier New', monospace;
-            --font-display: 'Space Grotesk', system-ui, sans-serif;
+            --danger: #ff4d6d;
         }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
+            background: var(--bg-color);
+            color: #e0e0e0;
+            font-family: 'Space Grotesk', system-ui, sans-serif;
             min-height: 100vh;
             display: flex;
-            justify-content: center;
             align-items: center;
-            background-color: var(--bg-color);
-            font-family: var(--font-mono);
-            color: var(--primary-color);
-            overflow: hidden;
-            position: relative;
+            justify-content: center;
+            padding: 2rem;
+            background-image: radial-gradient(circle at 70% 30%, var(--primary-glow) 0%, transparent 60%);
         }
-
-        /* Animated dot matrix background */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background-image:
-                radial-gradient(circle at center, #1a1a1a 1.5px, transparent 1.5px);
-            background-size: var(--dot-spacing) var(--dot-spacing);
-            opacity: 0.6;
-            z-index: 0;
-        }
-
-        /* Subtle scan line effect */
-        body::after {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.1) 2px,
-                rgba(0, 0, 0, 0.1) 4px
-            );
-            pointer-events: none;
-            z-index: 1000;
-            opacity: 0.3;
-        }
-
-        /* Ambient glow in corners */
-        .ambient-glow {
-            position: fixed;
-            width: 600px;
-            height: 600px;
-            border-radius: 50%;
-            filter: blur(150px);
-            opacity: 0.08;
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .ambient-glow.top-left {
-            top: -300px;
-            left: -300px;
-            background: var(--primary-color);
-        }
-
-        .ambient-glow.bottom-right {
-            bottom: -300px;
-            right: -300px;
-            background: var(--primary-color);
-        }
-
-        .login-container {
-            position: relative;
-            z-index: 10;
+        .card {
             background: var(--bg-card);
-            padding: 60px 50px;
             border: 1px solid var(--border-color);
             border-radius: 12px;
-            box-shadow:
-                0 0 60px var(--primary-glow),
-                0 25px 50px -12px rgba(0, 0, 0, 0.5),
-                inset 0 1px 0 rgba(255, 255, 255, 0.02);
-            text-align: center;
+            padding: 2.5rem;
+            max-width: 560px;
             width: 100%;
-            max-width: 420px;
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-
-            /* Entry animation */
-            animation: containerFadeIn 0.6s ease-out;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.6), 0 0 80px var(--primary-glow);
         }
-
-        @keyframes containerFadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px) scale(0.98);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-
-        /* The Dot Matrix Logo Effect */
-        .logo {
-            font-family: var(--font-display);
-            font-size: 3.5rem;
-            font-weight: 700;
-            margin: 0 0 8px 0;
-            text-transform: lowercase;
-            letter-spacing: 3px;
-            position: relative;
-
-            /* Fills the text with a dot pattern */
-            background-image: radial-gradient(circle, var(--primary-color) 1.5px, transparent 1.5px);
-            background-size: 5px 5px;
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-
-            /* Glow effect */
-            filter: drop-shadow(0 0 8px var(--primary-glow-strong));
-
-            /* Staggered reveal */
-            animation: logoReveal 0.8s ease-out 0.2s both;
-        }
-
-        @keyframes logoReveal {
-            from {
-                opacity: 0;
-                filter: drop-shadow(0 0 0 transparent);
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                filter: drop-shadow(0 0 8px var(--primary-glow-strong));
-                transform: translateY(0);
-            }
-        }
-
-        /* Tagline with typing cursor */
-        .tagline {
-            font-size: 0.75rem;
-            margin-top: 0;
-            margin-bottom: 36px;
-            color: var(--text-muted);
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            animation: fadeIn 0.6s ease-out 0.4s both;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
-        /* Subtitle with blinking cursor */
-        .subtitle {
-            font-size: 0.85rem;
-            margin-top: -28px;
-            margin-bottom: 32px;
-            color: var(--text-dim);
-            letter-spacing: 1px;
-            font-family: var(--font-mono);
-            animation: fadeIn 0.6s ease-out 0.5s both;
-        }
-
-        .cursor {
-            display: inline-block;
-            animation: blink 1s step-end infinite;
+        h1 {
+            font-family: 'JetBrains Mono', monospace;
             color: var(--primary-color);
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
         }
-
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
-        }
-
-        /* Error message */
-        .error-message {
-            background: var(--error-glow);
-            border: 1px solid var(--error-color);
-            color: var(--error-color);
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 24px;
-            font-size: 0.85rem;
-            text-align: left;
-            direction: rtl;
-            animation: errorShake 0.4s ease-out;
-        }
-
-        @keyframes errorShake {
-            0%, 100% { transform: translateX(0); }
-            20%, 60% { transform: translateX(-6px); }
-            40%, 80% { transform: translateX(6px); }
-        }
-
-        .error-message::before {
-            content: '> ';
-            color: var(--error-color);
-        }
-
-        /* Form groups */
-        .form-group {
-            margin-bottom: 24px;
-            text-align: left;
-            animation: formGroupSlide 0.5s ease-out both;
-        }
-
-        .form-group:nth-child(1) { animation-delay: 0.6s; }
-        .form-group:nth-child(2) { animation-delay: 0.7s; }
-
-        @keyframes formGroupSlide {
-            from {
-                opacity: 0;
-                transform: translateX(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(0);
-            }
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 10px;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 3px;
+        .lede {
             color: var(--text-dim);
-            font-weight: 500;
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+            line-height: 1.5;
         }
-
-        .form-group label::before {
-            content: '// ';
-            color: var(--primary-dim);
+        label {
+            display: block;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
-
-        .form-group input {
+        input[type="text"] {
             width: 100%;
-            padding: 14px 18px;
             background: var(--bg-elevated);
             border: 1px solid var(--border-color);
-            color: var(--primary-color);
-            font-family: var(--font-mono);
+            border-radius: 6px;
+            padding: 0.9rem 1rem;
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.95rem;
+            margin-bottom: 1.5rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        input[type="text"]:focus {
             outline: none;
-            transition: all 0.25s ease;
-            border-radius: 6px;
-        }
-
-        .form-group input::placeholder {
-            color: var(--text-muted);
-            opacity: 0.6;
-        }
-
-        .form-group input:focus {
             border-color: var(--primary-color);
-            box-shadow:
-                0 0 0 3px var(--primary-glow),
-                0 0 20px var(--primary-glow);
-            background: #000;
+            box-shadow: 0 0 0 3px var(--primary-glow);
         }
-
-        /* Email input: LTR for email addresses */
-        .form-group input[name="email"] {
-            direction: ltr;
-            text-align: left;
-        }
-
-        /* Password input */
-        .form-group input[name="password"] {
-            direction: ltr;
-            text-align: left;
-        }
-
-        /* Submit button */
-        .login-btn {
+        button {
             width: 100%;
-            padding: 16px;
-            margin-top: 12px;
-            background: transparent;
-            color: var(--primary-color);
-            border: 1px solid var(--primary-color);
+            background: var(--primary-color);
+            border: none;
             border-radius: 6px;
-            font-family: var(--font-mono);
-            font-size: 0.85rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 4px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-            animation: buttonFadeIn 0.5s ease-out 0.8s both;
-        }
-
-        @keyframes buttonFadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .login-btn::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: var(--primary-color);
-            transform: scaleX(0);
-            transform-origin: left;
-            transition: transform 0.3s ease;
-            z-index: -1;
-        }
-
-        .login-btn:hover {
+            padding: 1rem;
             color: var(--bg-color);
-            box-shadow:
-                0 0 30px var(--primary-glow-strong),
-                0 0 60px var(--primary-glow);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            cursor: pointer;
+            transition: background 0.2s, box-shadow 0.2s;
         }
-
-        .login-btn:hover::before {
-            transform: scaleX(1);
+        button:hover {
+            background: var(--primary-dim);
+            box-shadow: 0 0 20px var(--primary-glow-strong);
         }
-
-        .login-btn:active {
-            transform: scale(0.98);
+        .error {
+            background: rgba(255, 77, 109, 0.1);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 0.9rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
         }
-
-        .login-btn:focus-visible {
-            outline: 2px solid var(--primary-color);
-            outline-offset: 3px;
-        }
-
-        /* Loading state for HTMX */
-        .login-btn.htmx-request {
-            opacity: 0.7;
-            pointer-events: none;
-        }
-
-        .login-btn.htmx-request::after {
-            content: '...';
-            animation: loadingDots 1s infinite;
-        }
-
-        @keyframes loadingDots {
-            0%, 20% { content: '.'; }
-            40% { content: '..'; }
-            60%, 100% { content: '...'; }
-        }
-
-        /* Footer link */
-        .footer-link {
-            margin-top: 28px;
-            font-size: 0.8rem;
+        .help-text {
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border-color);
             color: var(--text-muted);
-            animation: fadeIn 0.5s ease-out 0.9s both;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            text-align: center;
         }
-
-        .footer-link a {
-            color: var(--primary-dim);
-            text-decoration: none;
-            border-bottom: 1px solid transparent;
-            transition: all 0.2s ease;
-        }
-
-        .footer-link a:hover {
+        .help-text a {
             color: var(--primary-color);
-            border-bottom-color: var(--primary-color);
+            text-decoration: none;
         }
-
-        /* Version badge */
-        .version {
-            position: absolute;
-            bottom: 16px;
-            right: 20px;
-            font-size: 0.65rem;
-            color: var(--text-muted);
-            opacity: 0.5;
-            letter-spacing: 1px;
-        }
-
-        /* Status indicator */
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 20px;
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            animation: fadeIn 0.5s ease-out 1s both;
-        }
-
-        .status-dot {
-            width: 6px;
-            height: 6px;
-            background: var(--primary-color);
-            border-radius: 50%;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-                box-shadow: 0 0 0 0 var(--primary-glow-strong);
-            }
-            50% {
-                opacity: 0.6;
-                box-shadow: 0 0 0 4px transparent;
-            }
-        }
-
-        /* Responsive adjustments */
-        @media (max-width: 480px) {
-            .login-container {
-                margin: 16px;
-                padding: 40px 28px;
-            }
-
-            .logo {
-                font-size: 2.8rem;
-            }
-
-            .tagline {
-                font-size: 0.65rem;
-            }
-        }
-
-        /* Reduced motion preference */
-        @media (prefers-reduced-motion: reduce) {
-            *,
-            *::before,
-            *::after {
-                animation-duration: 0.01ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: 0.01ms !important;
-            }
-        }
+        .help-text a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <!-- Ambient glow effects -->
-    <div class="ambient-glow top-left"></div>
-    <div class="ambient-glow bottom-right"></div>
-
-    <div class="login-container">
-        <h1 class="logo">qmemory</h1>
-        <p class="tagline">Graph Memory for AI Agents</p>
-        <div class="subtitle">system.auth<span class="cursor">_</span></div>
+    <div class="card">
+        <h1>qmemory</h1>
+        <p class="lede">Sign in with your personal URL. Paste the whole URL you saved at signup — or just the code part if you remember it.</p>
 
         {% if error %}
-        <div class="error-message">
-            {{ error }}
-        </div>
+        <div class="error">{{ error }}</div>
         {% endif %}
 
-        <form
-            method="post"
-            action="/login"
-            hx-post="/login"
-            hx-target="body"
-            hx-swap="outerHTML"
-            hx-indicator=".login-btn"
-            toolname="qmemory_login"
-            tooldescription="Authenticate user with email and password to access qmemory system"
-        >
+        <form method="post" action="/login">
             {% if return_to %}
-            <input type="hidden" name="return_to" value="{{ return_to }}">
+            <input type="hidden" name="return_to" value="{{ return_to }}" />
             {% endif %}
-            <div class="form-group">
-                <label for="email">Email</label>
-                <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    required
-                    autocomplete="email"
-                    placeholder="user@domain.com"
-                    toolparamname="email"
-                    toolparamdescription="User's registered email address"
-                >
-            </div>
-
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input
-                    type="password"
-                    id="password"
-                    name="password"
-                    required
-                    autocomplete="current-password"
-                    placeholder="••••••••"
-                    toolparamname="password"
-                    toolparamdescription="User's account password (min 8 characters)"
-                >
-            </div>
-
-            <button type="submit" class="login-btn">
-                Initialize
-            </button>
+            <label for="user_input">Your personal URL or code</label>
+            <input
+                type="text"
+                id="user_input"
+                name="user_input"
+                required
+                autofocus
+                placeholder="{{ base_url }}/mcp/u/your-code/"
+            />
+            <button type="submit">Sign in</button>
         </form>
 
-        <p class="footer-link">
-            No account? <a href="/signup">Create one →</a>
-        </p>
-
-        <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span>system online</span>
+        <div class="help-text">
+            No account yet? <a href="/signup">Create one in 10 seconds</a>. Zero friction, zero email.
         </div>
-
-        <span class="version">v2.0</span>
     </div>
-
-    <!-- Fallback for non-HTMX browsers -->
-    <noscript>
-        <style>
-            .login-btn.htmx-request::after { content: ''; }
-        </style>
-    </noscript>
 </body>
 </html>

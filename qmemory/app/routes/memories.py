@@ -72,7 +72,7 @@ async def memories_page(request: Request):
         logger.info("memories.redirect_to_login reason=not_authenticated")
         return RedirectResponse("/login", status_code=302)
 
-    logger.info("memories.page_viewed user=%s", user.get("email"))
+    logger.info("memories.page_viewed user=%s", user.get("user_code"))
 
     return templates.TemplateResponse(
         request,
@@ -109,7 +109,7 @@ async def memories_search(request: Request, q: str = "", category: str = ""):
 
     logger.info(
         "memories.search user=%s query=%s category=%s",
-        user.get("email"),
+        user.get("user_code"),
         q,
         category,
     )
@@ -171,7 +171,7 @@ async def memories_search(request: Request, q: str = "", category: str = ""):
     except Exception as exc:
         logger.error(
             "memories.search_failed user=%s reason=%s",
-            user.get("email"),
+            user.get("user_code"),
             exc,
         )
 
@@ -212,7 +212,7 @@ async def memory_detail(request: Request, memory_id: str):
 
     logger.info(
         "memories.detail_viewed user=%s memory_id=%s",
-        user.get("email"),
+        user.get("user_code"),
         memory_id,
     )
 

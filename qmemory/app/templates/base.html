@@ -800,11 +800,10 @@
             <a href="/dashboard" class="nav-link {% if request.url.path == '/dashboard' %}active{% endif %}">Dashboard</a>
             <a href="/memories" class="nav-link {% if '/memories' in request.url.path %}active{% endif %}">Memories</a>
             <a href="/connect" class="nav-link {% if request.url.path == '/connect' %}active{% endif %}">Connect</a>
-            <a href="/tokens" class="nav-link {% if request.url.path == '/tokens' %}active{% endif %}">Tokens</a>
         </div>
 
         <div class="nav-user">
-            <span class="nav-user-email">{{ user.email }}</span>
+            <span class="nav-user-email">{{ user.display_name }} <span style="color: var(--text-muted); font-size: 0.8em;">({{ user.user_code }})</span></span>
             <form method="post" action="/logout" style="display: inline;">
                 <button type="submit" class="nav-logout">Logout</button>
             </form>

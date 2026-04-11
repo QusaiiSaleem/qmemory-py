@@ -1,163 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Connect Tools — Qmemory{% endblock %}
+{% block title %}Connect — Qmemory{% endblock %}
 {% block content %}
 
 <div class="page-header">
-    <h1 class="page-title">Connect AI Tools</h1>
-    <p class="page-subtitle">Copy the config below and paste into your tool — takes 30 seconds</p>
+    <h1 class="page-title">Connect your AI tools</h1>
+    <p class="page-subtitle">Your personal URL is the only thing you need. Save it.</p>
 </div>
 
-{% if token %}
-
-<!-- =========================================================
-     MCP Endpoint Display
-     ========================================================= -->
-<div class="card" style="margin-bottom: 24px;">
-    <div class="card-body">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span class="form-label" style="margin-bottom: 0;">MCP Endpoint</span>
-        </div>
-        <div class="code-block copyable">
-            <code>https://mem0.qusai.org/mcp/</code>
-            <button class="copy-btn" onclick="navigator.clipboard.writeText('https://mem0.qusai.org/mcp/'); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
-        </div>
-    </div>
-</div>
-
-<!-- =========================================================
-     Tool Tabs — Claude Code, Claude.ai, NanoBot
-     ========================================================= -->
-<div x-data="{ tab: 'claude-code' }">
-
-    <!-- Tab Navigation -->
-    <div class="filter-pills" style="margin-bottom: 24px;">
-        <button class="filter-pill" :class="tab === 'claude-code' ? 'active' : ''" @click="tab = 'claude-code'">Claude Code</button>
-        <button class="filter-pill" :class="tab === 'claude-ai' ? 'active' : ''" @click="tab = 'claude-ai'">Claude.ai</button>
-        <button class="filter-pill" :class="tab === 'nanobot' ? 'active' : ''" @click="tab = 'nanobot'">NanoBot</button>
-    </div>
-
-    <!-- Claude Code Tab -->
-    <div class="card" x-show="tab === 'claude-code'" style="margin-bottom: 16px;">
-        <div class="card-body">
-            <h3 class="card-title">Claude Code</h3>
-
-            <p class="page-subtitle" style="margin-bottom: 16px;">Step 1: Run this command in your terminal</p>
-            <div class="code-block copyable">
-                <code>claude mcp add qmemory \
-  --transport http \
-  --url https://mem0.qusai.org/mcp/ \
-  --header "Authorization: Bearer {{ token }}"</code>
-                <button class="copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.querySelector('code').textContent); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
-            </div>
-
-            <p class="page-subtitle" style="margin-top: 20px; margin-bottom: 8px;">Step 2: Restart Claude Code</p>
-            <p class="page-subtitle" style="margin-bottom: 16px;">Step 3: Test it — type "bootstrap my memory"</p>
-
-            <div style="border-top: 1px solid var(--border-color); margin: 24px 0;"></div>
-
-            <p class="page-subtitle" style="margin-bottom: 8px;">Or manually add to <code style="color: var(--primary-color);">~/.claude.json</code>:</p>
-            <div class="code-block copyable">
-                <code>{
-  "mcpServers": {
-    "qmemory": {
-      "type": "streamable-http",
-      "url": "https://mem0.qusai.org/mcp/",
-      "headers": {
-        "Authorization": "Bearer {{ token }}"
-      }
-    }
-  }
-}</code>
-                <button class="copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.querySelector('code').textContent); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Claude.ai Tab -->
-    <div class="card" x-show="tab === 'claude-ai'" style="margin-bottom: 16px;">
-        <div class="card-body">
-            <h3 class="card-title">Claude.ai</h3>
-
-            <p class="page-subtitle" style="margin-bottom: 8px;">Step 1: Open Claude.ai Settings (bottom-left gear icon)</p>
-            <p class="page-subtitle" style="margin-bottom: 8px;">Step 2: Go to "Integrations" tab</p>
-            <p class="page-subtitle" style="margin-bottom: 8px;">Step 3: Click "Add Integration" and enter:</p>
-
-            <div style="background: var(--bg-elevated); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-                <table style="width: 100%; border-collapse: collapse;">
-                    <tr>
-                        <td style="padding: 8px 0; color: var(--text-dim); font-size: 0.8rem;">Integration Name</td>
-                        <td style="padding: 8px 0; font-family: var(--font-mono); color: var(--primary-color);">qmemory</td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 8px 0; color: var(--text-dim); font-size: 0.8rem;">Server URL</td>
-                        <td style="padding: 8px 0; font-family: var(--font-mono); color: var(--primary-color); font-size: 0.85rem;">
-                            https://mem0.qusai.org/mcp/
-                            <button class="copy-btn" style="position: relative; top: 0; left: 8px;" onclick="navigator.clipboard.writeText('https://mem0.qusai.org/mcp/'); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
-                        </td>
-                    </tr>
-                </table>
-            </div>
-
-            <p class="page-subtitle" style="margin-bottom: 8px;">That's it! Just the URL — no client ID or secret needed.</p>
-
-            <p class="page-subtitle" style="margin-top: 20px;">Step 4: Click "Connect" — you'll be redirected to log in</p>
-            <p class="page-subtitle" style="margin-top: 8px;">Step 5: Log in with your Qmemory account and click "Allow Access"</p>
-            <p class="page-subtitle" style="margin-top: 20px;">Step 6: Test it — ask Claude "bootstrap my memory"</p>
-
-            <div style="border-top: 1px solid var(--border-color); margin: 24px 0;"></div>
-
-            <p style="font-size: 0.8rem; color: var(--text-muted);">
-                <strong>How it works:</strong> Claude.ai automatically handles OAuth registration.
-                When you click "Connect", it registers itself with Qmemory, redirects you to log in,
-                and securely exchanges tokens — all behind the scenes.
-            </p>
-        </div>
-    </div>
-
-    <!-- NanoBot Tab -->
-    <div class="card" x-show="tab === 'nanobot'" style="margin-bottom: 16px;">
-        <div class="card-body">
-            <h3 class="card-title">NanoBot</h3>
-
-            <p class="page-subtitle" style="margin-bottom: 16px;">Add to <code style="color: var(--primary-color);">~/.nanobot/config.json</code> under <code style="color: var(--primary-color);">tools.mcpServers</code>:</p>
-            <div class="code-block copyable">
-                <code>"qmemory": {
-  "type": "streamableHttp",
-  "url": "https://mem0.qusai.org/mcp/",
-  "headers": {
-    "Authorization": "Bearer {{ token }}"
-  },
-  "enabledTools": ["*"]
-}</code>
-                <button class="copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.querySelector('code').textContent); this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000)">Copy</button>
-            </div>
-
-            <p class="page-subtitle" style="margin-top: 20px;">Then restart: <code style="color: var(--primary-color);">nanobot gateway</code></p>
-
-            <div style="border-top: 1px solid var(--border-color); margin: 24px 0;"></div>
-
-            <p class="page-subtitle">Note: This replaces the local plugin. No local SurrealDB needed.</p>
-        </div>
-    </div>
-
-</div>
-
-{% else %}
-
-<!-- =========================================================
-     No Token — Prompt to Generate
-     ========================================================= -->
 <div class="card">
     <div class="card-body">
-        <div class="empty-state">
-            <div class="empty-state-icon">🔑</div>
-            <div class="empty-state-title">No API Token Found</div>
-            <div class="empty-state-desc" style="margin-bottom: 24px;">You need an API token to connect your AI tools</div>
-            <a href="/tokens" class="btn btn-primary">Generate API Token</a>
+        <div style="background: rgba(255, 170, 0, 0.08); border: 1px solid #ffaa00; color: #ffdd88; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem;">
+            <strong>⚠ Save this URL right now.</strong> It is the only way to reach your memories across Claude Code and Claude.ai. If you lose it, you lose your data. There is no password reset and no email recovery.
         </div>
+
+        <h3 style="color: var(--primary-dim); margin-bottom: 0.5rem;">Your personal URL</h3>
+        <div style="background: var(--bg-elevated); border: 1px solid var(--primary-color); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; font-family: 'JetBrains Mono', monospace; color: var(--primary-color); word-break: break-all; box-shadow: 0 0 20px rgba(0, 255, 170, 0.15);">
+            {{ personal_url }}
+        </div>
+
+        <h3 style="color: var(--primary-dim); margin: 1.5rem 0 0.5rem;">Claude Code</h3>
+        <pre style="background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.9rem 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #ccc; overflow-x: auto; white-space: pre;">claude mcp add --transport http qmemory {{ personal_url }}</pre>
+
+        <h3 style="color: var(--primary-dim); margin: 1.5rem 0 0.5rem;">Claude.ai (custom connector)</h3>
+        <p style="color: #ccc; line-height: 1.6;">
+            Open <strong>Settings → Connectors → Add custom connector</strong>, paste the URL above, give it a name like "qmemory", and save. Start a new chat and Claude will have access to your memory graph.
+        </p>
+
+        <h3 style="color: var(--primary-dim); margin: 1.5rem 0 0.5rem;">Available tools</h3>
+        <p style="color: #ccc; line-height: 1.6;">
+            Claude gets 9 tools against this URL: <code>qmemory_bootstrap</code>, <code>qmemory_search</code>, <code>qmemory_get</code>, <code>qmemory_save</code>, <code>qmemory_correct</code>, <code>qmemory_link</code>, <code>qmemory_person</code>, <code>qmemory_books</code>, <code>qmemory_health</code>.
+        </p>
     </div>
 </div>
-
-{% endif %}
 
 {% endblock %}

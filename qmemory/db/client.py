@@ -314,8 +314,7 @@ async def apply_schema(db: Any) -> None:
     # Order matters: base schema first, then extensions that depend on it
     schema_files = [
         "schema.surql",          # Base memory graph (tables, indices)
-        "schema_cloud.surql",    # Cloud: user table, api_token, owner fields
-        "schema_oauth.surql",    # OAuth 2.0: oauth_client, authorization_code
+        "schema_cloud.surql",    # Cloud: legacy fields from pre-rebuild era
     ]
 
     for filename in schema_files:

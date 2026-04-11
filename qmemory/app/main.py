@@ -10,7 +10,10 @@ Run with:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 import time
 
 from fastapi import FastAPI, Request
@@ -21,12 +24,12 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from qmemory.app.config import get_app_settings
+from qmemory.app.middleware.session_user import SessionUserMiddleware
 from qmemory.app.middleware.user_context import MCPUserMiddleware
 from qmemory.app.routes.auth import get_session_user, router as auth_router
 from qmemory.app.routes.connect import router as connect_router
 from qmemory.app.routes.dashboard import router as dashboard_router
 from qmemory.app.routes.memories import router as memories_router
-from qmemory.app.routes.tokens import router as tokens_router
 from qmemory.db.client import is_healthy
 from qmemory.mcp.operations import OPERATIONS
 from qmemory.mcp.registry import mount_operations
@@ -76,15 +79,53 @@ settings = get_app_settings()
 
 mcp_app = mcp.streamable_http_app()
 
+
 # FastMCP's streamable_http_app() returns a Starlette instance whose
-# lifespan lives on its router. We pass that to FastAPI so the MCP
-# session manager's task group starts up when the API does.
+# lifespan lives on its router. We wrap it so we can ALSO start our
+# in-process background worker during app startup. The worker iterates
+# all active users every WORKER_INTERVAL seconds, runs the 5-job cycle
+# per user, and saves a health report into each user's DB.
+#
+# Enabled by default in production; disable by setting
+# QMEMORY_WORKER_ENABLED=0 (useful during local dev with no LLM keys).
+@contextlib.asynccontextmanager
+async def _combined_lifespan(app):
+    async with mcp_app.router.lifespan_context(app):
+        worker_task: asyncio.Task | None = None
+
+        if os.environ.get("QMEMORY_WORKER_ENABLED", "1") == "1":
+            from qmemory.worker import run_worker
+
+            interval = int(os.environ.get("QMEMORY_WORKER_INTERVAL", "3600"))
+            logger.info(
+                "Starting in-process worker (interval=%ds, all_users=True)",
+                interval,
+            )
+            worker_task = asyncio.create_task(
+                run_worker(interval=interval, once=False, all_users=True),
+                name="qmemory-worker",
+            )
+        else:
+            logger.info("In-process worker disabled (QMEMORY_WORKER_ENABLED=0)")
+
+        try:
+            yield
+        finally:
+            if worker_task is not None:
+                logger.info("Stopping in-process worker")
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+
 api = FastAPI(
     title="Qmemory Cloud",
     version="1.0.0",
     description="Graph-based memory for AI agents - HTTP API",
     debug=settings.debug,
-    lifespan=mcp_app.router.lifespan_context,
+    lifespan=_combined_lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -124,6 +165,9 @@ logger.info("CORS middleware enabled - explicit claude.ai/anthropic.com origins"
 api.add_middleware(MCPUserMiddleware)
 logger.info("MCPUserMiddleware registered - /mcp/u/{code}/ routes are live")
 
+api.add_middleware(SessionUserMiddleware, secret_key=settings.secret_key)
+logger.info("SessionUserMiddleware registered - web UI reads db_name from session")
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -132,7 +176,6 @@ api.include_router(auth_router)
 api.include_router(connect_router)
 api.include_router(dashboard_router)
 api.include_router(memories_router)
-api.include_router(tokens_router)
 
 
 @api.get("/")

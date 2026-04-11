@@ -55,13 +55,16 @@ async def dashboard_page(request: Request):
     - Total relates (links) count
     - Last 10 memories (sorted by created_at DESC)
     """
-    # Check if user is logged in — redirect to /login if not
+    # Check if user is logged in — redirect to /login if not.
+    # The SessionUserMiddleware has already set _user_db for us, so
+    # every get_db() call in this handler automatically hits the
+    # signed-in user's private database.
     user = get_session_user(request)
     if not user:
         logger.info("dashboard.redirect_to_login reason=not_authenticated")
         return RedirectResponse("/login", status_code=302)
 
-    logger.info("dashboard.page_viewed user=%s", user.get("email"))
+    logger.info("dashboard.page_viewed user=%s", user.get("user_code"))
 
     # Default values in case queries fail
     memory_count = 0
@@ -119,7 +122,7 @@ async def dashboard_page(request: Request):
         )
 
     except Exception as exc:
-        logger.error("dashboard.data_load_failed user=%s reason=%s", user.get("email"), exc)
+        logger.error("dashboard.data_load_failed user=%s reason=%s", user.get("user_code"), exc)
 
     return templates.TemplateResponse(
         request,

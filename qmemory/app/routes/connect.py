@@ -1,19 +1,15 @@
 """
-Connect page — shows copy-paste MCP configs for AI tools.
+Connect page — shows the user's personal MCP URL + copy-paste configs.
 
-After login, users visit /connect to see ready-to-use configuration
-snippets for Claude Code, Claude.ai, and NanoBot. Each snippet includes
-the user's API token pre-filled so they can just copy and paste.
-
-Three tabs:
-1. Claude Code — CLI command + manual ~/.claude.json config
-2. Claude.ai — Settings → Integrations flow
-3. NanoBot — ~/.nanobot/config.json config
+After signup/login, the user visits /connect to see their personal URL
+and ready-to-paste configuration snippets for Claude Code and Claude.ai.
+There are no tokens — the URL is the credential.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -22,54 +18,42 @@ from fastapi.templating import Jinja2Templates
 
 from qmemory.app.routes.auth import get_session_user
 
-# ---------------------------------------------------------------------------
-# Setup
-# ---------------------------------------------------------------------------
-
 logger = logging.getLogger(__name__)
 
-# Router — gets included in the main FastAPI app
 router = APIRouter()
 
-# Jinja2 templates — same pattern as auth.py
-# This file is at qmemory/app/routes/connect.py
-# Templates are at qmemory/app/templates/
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
-# ---------------------------------------------------------------------------
-# GET /connect — show MCP connection instructions
-# ---------------------------------------------------------------------------
+def _public_base_url(request: Request) -> str:
+    override = os.environ.get("QMEMORY_PUBLIC_URL")
+    if override:
+        return override.rstrip("/")
+    return f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
 
 
 @router.get("/connect", response_class=HTMLResponse)
 async def connect_page(request: Request):
-    """
-    Show MCP connection instructions with the user's API token.
-
-    If the user has a token stored in their session (from /tokens page),
-    it will be pre-filled in the config snippets. If not, they'll see
-    a prompt to generate one first.
-    """
-    # Check if user is logged in — redirect to /login if not
+    """Show the user's personal URL + copy-paste snippets for Claude Code & Claude.ai."""
     user = get_session_user(request)
     if not user:
         logger.info("connect.redirect_to_login reason=not_authenticated")
         return RedirectResponse("/login", status_code=302)
 
-    # Get the user's most recent API token from session (if any)
-    # This is set by the /tokens page (Task 8) when a token is generated
-    token = request.session.get("last_generated_token")
+    user_code = user["user_code"]
+    base_url = _public_base_url(request)
+    personal_url = f"{base_url}/mcp/u/{user_code}/"
 
-    logger.info(
-        "connect.page_viewed user=%s has_token=%s",
-        user.get("email"),
-        bool(token),
-    )
+    logger.info("connect.page_viewed user_code=%s", user_code)
 
     return templates.TemplateResponse(
         request,
         "pages/connect.html",
-        context={"user": user, "token": token},
+        context={
+            "user": user,
+            "user_code": user_code,
+            "personal_url": personal_url,
+            "base_url": base_url,
+        },
     )
