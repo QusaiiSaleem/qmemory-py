@@ -374,25 +374,36 @@ async def _graph_leg(
     if not entity_ids:
         return []
 
-    # Fetch memories linked to these entities
+    # Fetch memories linked to these entities.
+    #
+    # Important: traverse FROM the (small) relates edge set OUTWARD instead
+    # of doing `WHERE id IN (subquery)` against the (large) memory table.
+    # The old `id IN (...)` form forced a full memory scan checking each
+    # row against the edge set — for hub entities with many edges this
+    # took 191 seconds in production. The new form fetches the edge rows
+    # first (cheap, indexed by `out`), then dereferences `in.*` to get
+    # the memory records (also indexed). Filtering happens via WHERE on
+    # the dereferenced memory fields.
     all_memories: list[dict] = []
     for eid in entity_ids:
         mem_surql = f"""
-        SELECT {MEMORY_FIELDS} FROM memory
-        WHERE is_active = true
-            AND (valid_until IS NONE OR valid_until > time::now())
-            {filters["clauses"]}
-            AND id IN (
-                SELECT VALUE in FROM relates WHERE out = <record>$eid
-            )
-        ORDER BY salience DESC
+        SELECT VALUE in.* FROM relates
+        WHERE out = <record>$eid
+            AND in.is_active = true
+            AND (in.valid_until IS NONE OR in.valid_until > time::now())
+        ORDER BY in.salience DESC
         LIMIT $limit;
         """
         mem_params: dict[str, Any] = {"eid": eid, "limit": GRAPH_LEG_LIMIT}
-        mem_params.update(filters["params"])
         rows = await query(db, mem_surql, mem_params)
         if rows and isinstance(rows, list):
-            all_memories.extend(rows)
+            # Strip the embedding field (we don't include it in MEMORY_FIELDS
+            # in the old query but `in.*` returns everything). Also drop any
+            # rows that aren't memory records (defensive).
+            for row in rows:
+                if isinstance(row, dict) and row.get("id"):
+                    row.pop("embedding", None)
+                    all_memories.append(row)
 
     # Tag results
     for i, m in enumerate(all_memories):
