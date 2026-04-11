@@ -135,10 +135,41 @@ not re-add it; the single-package rule is structural and prevents the old
 ## Gotchas
 
 - **`http_app(path="/")` NOT `path="/mcp/"`** — `api.mount("/mcp", ...)` strips the prefix before passing to FastMCP. Using `path="/mcp/"` causes 404.
-- **Schema loader must load ALL .surql files** — `apply_schema()` in `db/client.py` loads 3 files in order: `schema.surql` → `schema_cloud.surql` → `schema_oauth.surql`. Missing a file causes silent failures (tables don't exist, queries return empty).
+- **`/mcp/{path:path}` legacy 410 vs `/_mcp` mount** — the FastMCP sub-app is mounted at `/_mcp` (internal-only), `MCPUserMiddleware` rewrites `/mcp/u/{code}/...` → `/_mcp/...`, and the catch-all `/mcp/{path:path}` returns 410 Gone for any direct hits. Mounting at `/mcp` directly would let the 410 catch-all swallow rewritten requests.
+- **Schema loader file list** — `apply_schema()` in `db/client.py` loads `schema.surql` then `schema_cloud.surql`. The OAuth schema was deleted in the rebuild. Missing a file causes silent failures (tables don't exist, queries return empty).
+- **`apply_admin_schema()` is separate** — `db/admin_schema.surql` (the user routing table) is applied via its own helper, NOT the base loader. Used by `get_admin_db()`.
 - **Dockerfile must COPY before pip install** — `COPY . .` then `RUN pip install .`. If you split them (copy pyproject.toml first, install, then copy source), Docker caches the old package and new code changes don't deploy.
-- **SurrealDB v3 LET vars don't persist** — `LET $x = (...); SELECT FROM $x;` fails. Use inline subqueries or two-step Python-side approach instead.
 - **`SELECT *` includes embedding** — Always use `MEMORY_FIELDS` constant from `recall.py` (or explicit field lists) in queries. Never `SELECT *` from memory/entity — the 1024-float embedding array wastes agent context tokens (~10KB per record).
+
+### SurrealDB v3 BM25 fulltext: 3 verified bugs
+
+The qmemory rebuild discovered three serious v3 bugs in the `@@` operator. Each took hours to diagnose because the failure modes look like data problems, not query problems. Document them here so we don't re-discover them.
+
+1. **`WHERE content @@ $param` returns WRONG rows** — parameterized fulltext binding is silently broken. Only the literal form `@@ "..."` works correctly. Workaround: inline the query as an escaped string literal in the SurrealQL. See `_content_leg` and `_escape_surql_string` in `qmemory/core/search.py`.
+
+2. **`search::score(0)` always returns 0.0** — there's no server-side BM25 relevance score in v3. We rank in Python by term frequency (count of query token substring occurrences in content), salience as tiebreaker.
+
+3. **`@@` is conjunctive (AND), not disjunctive (OR)** — a query with N tokens needs a single memory containing ALL N tokens. When the agent issues a 9-word mixed-language mega-query, content leg returns 0. **Don't paper over this with a Python OR-fallback** — the right fix is the `meta.search_hint` field plus the Query Craft rule in `QMEMORY_INSTRUCTIONS` teaching the agent to issue 2-3-keyword queries in ONE language.
+
+### Other v3 query gotchas
+
+- **`LET $x = (...); SELECT FROM $x;` fails** — LET vars don't persist across statements. Use inline subqueries or two-step Python.
+- **`ORDER BY` requires the order idiom in the SELECT** — `ORDER BY in.salience` throws `Missing order idiom 'in.salience' in statement selection` unless `in.salience AS salience` (or similar) appears in the SELECT clause.
+- **`ASSERT string::len($value) BETWEEN 4 AND 64` is invalid** — use `>= AND <=` instead.
+- **`WHERE id IN (subquery)` is catastrophically slow** for graph traversal — forces a full memory-table scan checking each row against the edge subquery. Took 191 seconds in production for one query. Workaround: traverse FROM the relates table outward (`SELECT in.* FROM relates WHERE out = $eid`), indexed by `out`, ~60x faster.
+- **FastMCP DNS rebinding auto-allowlist** — when binding to `127.0.0.1`, FastMCP auto-installs a Host-header allowlist that rejects `mem0.qusai.org` with HTTP 421. Pass `transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)` explicitly.
+- **`BaseHTTPMiddleware` doesn't propagate `ContextVar`s** — Starlette runs the downstream app in a separate task context, so `_user_db.set()` in middleware never reaches `get_db()` in core. Use pure ASGI middleware instead (`__call__(scope, receive, send)`).
+
+### Search behavior — `meta.search_hint`
+
+When `qmemory_search` returns 0 content-leg matches AND the query has 4+ tokens, `search_memories()` adds a `meta.search_hint` string to the response telling the agent that the query shape is the problem, not the data. The threshold lives in `LONG_QUERY_TOKEN_THRESHOLD` in `qmemory/core/search.py`. The hint text is fixed in the same file. The agent's `QMEMORY_INSTRUCTIONS` Query Craft section teaches it to read this field and retry with 2-3 keywords in one language.
+
+This is the **fail-loud-instead-of-silent-fallback** approach. We deliberately did NOT add a Python OR-fallback in the content leg because:
+- It hides the root cause (agents issuing bad queries) instead of fixing it
+- It adds 100+ lines of stopword filtering, two-phase fusion, and dedupe complexity
+- Every future agent connecting to qmemory would generate the same mega-queries, and the system would silently paper over them
+
+The `search_hint` + Query Craft rule together cost ~30 lines and teach the agent better behavior on every call.
 
 ## Architecture
 
