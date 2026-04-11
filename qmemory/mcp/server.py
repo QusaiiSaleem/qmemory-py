@@ -10,19 +10,12 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from qmemory.mcp.operations import OPERATIONS
+from qmemory.mcp.operations import OPERATIONS, QMEMORY_INSTRUCTIONS
 from qmemory.mcp.registry import mount_operations
 
 mcp = FastMCP(
     "qmemory_mcp",
-    instructions=(
-        "Graph memory for AI agents. "
-        "Call qmemory_bootstrap first to load your full memory context. "
-        "Then use qmemory_search to find specific memories, qmemory_save to "
-        "record new facts, qmemory_correct to fix errors, qmemory_link to "
-        "create relationships between knowledge nodes, and qmemory_person to "
-        "manage person entities."
-    ),
+    instructions=QMEMORY_INSTRUCTIONS,
 )
 
 mount_operations(mcp, OPERATIONS)

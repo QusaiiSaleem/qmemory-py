@@ -31,7 +31,7 @@ from qmemory.app.routes.connect import router as connect_router
 from qmemory.app.routes.dashboard import router as dashboard_router
 from qmemory.app.routes.memories import router as memories_router
 from qmemory.db.client import is_healthy
-from qmemory.mcp.operations import OPERATIONS
+from qmemory.mcp.operations import OPERATIONS, QMEMORY_INSTRUCTIONS
 from qmemory.mcp.registry import mount_operations
 
 logger = logging.getLogger(__name__)
@@ -47,14 +47,7 @@ logging.basicConfig(
 
 mcp = FastMCP(
     "qmemory_mcp",
-    instructions=(
-        "Graph memory for AI agents. "
-        "Call qmemory_bootstrap first to load your full memory context. "
-        "Then use qmemory_search to find specific memories, qmemory_save to "
-        "record new facts, qmemory_correct to fix errors, qmemory_link to "
-        "create relationships between knowledge nodes, and qmemory_person to "
-        "manage person entities."
-    ),
+    instructions=QMEMORY_INSTRUCTIONS,
     stateless_http=True,
     json_response=True,
     # Sub-app's internal route lives at / so mounting at /_mcp gives a
