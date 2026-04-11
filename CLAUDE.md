@@ -217,6 +217,37 @@ Two transports: **stdio** (Claude Code local, `qmemory serve`) and **HTTP** (Cla
 
 **IMPORTANT**: All 9 tools are defined in a single place — `qmemory/mcp/operations.py`. Both `qmemory/mcp/server.py` (stdio) and `qmemory/app/main.py` (HTTP) mount them via `qmemory.mcp.registry.mount_operations(mcp, OPERATIONS)`. Edit `operations.py` once; both transports pick it up automatically. Pydantic input models live in `qmemory/mcp/schemas.py` and enforce every parameter's type, range, and enum constraints. Error handling goes through `qmemory/mcp/errors.py::safe_tool()` — handlers never raise through the transport layer.
 
+### Server-level instructions (the 7 behavioral rules)
+
+The MCP `instructions` field is sent to clients on `initialize` — once per session, not per tool call. Claude.ai and Claude Code treat it as a connector-level system prompt, so behavioral rules encoded here apply to **every user, every project, automatically** — no per-project copy-paste needed on the Claude.ai side.
+
+**Single source of truth:** `qmemory/mcp/operations.py::QMEMORY_INSTRUCTIONS` (a module-level string constant). Both transports import it. Updates ship with `git push` → Railway redeploy → next session sees the new rules.
+
+**The 7 non-negotiable rules currently encoded:**
+
+1. **BOOTSTRAP FIRST** — every conversation, before any other action
+2. **SEARCH BEFORE ANSWERING** — never guess what's in memory
+3. **SAVE AS YOU GO** — every decision/preference/correction immediately
+4. **LINK WHAT'S CONNECTED** — graph edges turn facts into a brain
+5. **CORRECT, DON'T DUPLICATE** — supersede via `qmemory_correct`
+6. **CREATE PERSON ENTITIES** — first mention of any named human
+7. **FOLLOW THE GRAPH WHEN RESULTS ARE THIN** — two-hop traversal via `qmemory_get(include_neighbors=true, neighbor_depth=2)` rescues searches that missed direct matches
+
+Plus a Style section: silent operation, no permission-asking, language-preserving (Arabic stays Arabic), and one-fact-per-memory discipline.
+
+**To update the rules:** edit `QMEMORY_INSTRUCTIONS` in `operations.py`, commit, push. Verify with:
+```bash
+curl -s -X POST https://mem0.qusai.org/mcp/u/qusai/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
+  | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['result']['instructions'][:500])"
+```
+
+**Do NOT also put the rules in Claude.ai project instructions or in individual tool descriptions** — that creates two sources of truth that drift. The connector-level `instructions` field is the single canonical place. Individual tool descriptions describe **what** the tool does (sent on every tool list); the connector instructions describe **when and how often** to use them (sent once on initialize).
+
+The current instructions string is ~3,700 characters (~900 tokens) — substantial but cheap because it's sent once per session at the handshake, not per tool call. Length budget is generous; prioritize clarity over brevity.
+
 | Tool | Read-only | Purpose |
 |------|-----------|---------|
 | `qmemory_bootstrap` | Yes | Load full memory context at conversation start |
