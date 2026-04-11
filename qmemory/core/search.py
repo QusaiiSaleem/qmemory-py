@@ -48,6 +48,7 @@ VECTOR_RERANK_THRESHOLD = 5 # Only fire vector if BM25 returns fewer than this
 ENTITY_LEG_LIMIT = 5        # Max entities to return
 CONTENT_LEG_LIMIT = 50      # Max BM25 content results (pre-fusion)
 GRAPH_LEG_LIMIT = 15        # Max graph-traversal results (pre-fusion)
+DIVERSITY_CAP = 0.6         # Max fraction of results any single category can fill
 
 # Category display order — self always first
 CATEGORY_ORDER = [
@@ -608,6 +609,17 @@ async def _extract_and_separate(
             memories_grouped[cat] = []
         memories_grouped[cat].append(formatted)
         by_category[cat] = by_category.get(cat, 0) + 1
+
+    # Apply type diversity cap: no single category may exceed
+    # DIVERSITY_CAP fraction of `limit` results. Prevents monoculture
+    # (e.g. 10 out of 10 results from one book).
+    per_cat_cap = max(1, int(limit * DIVERSITY_CAP))
+    memories_grouped = {
+        cat: mems[:per_cat_cap] for cat, mems in memories_grouped.items()
+    }
+    # Keep by_category counts in sync with the capped totals so meta
+    # reflects what the caller actually sees.
+    by_category = {cat: len(mems) for cat, mems in memories_grouped.items()}
 
     # Sort categories — self first, then by CATEGORY_ORDER
     sorted_memories: dict[str, list[dict]] = {}

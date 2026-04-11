@@ -328,3 +328,22 @@ async def test_search_with_entity_id(db):
     assert any("coffee" in c for c in all_contents), (
         f"Should find 'coffee', got: {all_contents}"
     )
+
+
+async def test_diversity_cap_limits_single_category(db):
+    """Saving many same-category memories triggers the 60% cap."""
+    from qmemory.core.save import save_memory
+    from qmemory.core.search import search_memories
+
+    for i in range(15):
+        await save_memory(
+            content=f"preference fact #{i}: I like option letter",
+            category="preference",
+            salience=0.5,
+            db=db,
+        )
+
+    result = await search_memories(query_text="letter", limit=10, db=db)
+    prefs = result.get("memories", {}).get("preference", [])
+    # DIVERSITY_CAP = 0.6, limit = 10, so max 6 preference entries
+    assert len(prefs) <= 6, f"diversity cap violated: got {len(prefs)} preference"
