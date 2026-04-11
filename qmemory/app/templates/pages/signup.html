@@ -3,643 +3,224 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>qmemory — Create Account</title>
+    <title>qmemory — Sign up</title>
 
-    <!-- HTMX for SPA-like behavior -->
-    <script src="https://unpkg.com/htmx.org@2"></script>
-
-    <!-- Google Fonts: JetBrains Mono for terminal feel -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
     <style>
         :root {
-            /* The glowing green from your reference */
             --primary-color: #00ffaa;
             --primary-dim: #00cc88;
             --primary-glow: rgba(0, 255, 170, 0.15);
             --primary-glow-strong: rgba(0, 255, 170, 0.4);
-
             --bg-color: #050505;
             --bg-elevated: #0a0a0a;
             --bg-card: rgba(8, 8, 8, 0.9);
-
             --text-muted: #555;
             --text-dim: #888;
             --border-color: #222;
-            --border-focus: #333;
-
-            --dot-size: 2px;
-            --dot-spacing: 6px;
-
-            --error-color: #ff4757;
-            --error-glow: rgba(255, 71, 87, 0.2);
-
-            --success-color: #00ff88;
-            --success-glow: rgba(0, 255, 136, 0.2);
-
-            /* Typography */
-            --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Courier New', monospace;
-            --font-display: 'Space Grotesk', system-ui, sans-serif;
+            --danger: #ff4d6d;
+            --warning: #ffaa00;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
+            background: var(--bg-color);
+            color: #e0e0e0;
+            font-family: 'Space Grotesk', system-ui, sans-serif;
             min-height: 100vh;
             display: flex;
-            justify-content: center;
             align-items: center;
-            background-color: var(--bg-color);
-            font-family: var(--font-mono);
-            color: var(--primary-color);
-            overflow-x: hidden;
-            position: relative;
-            padding: 20px 0;
+            justify-content: center;
+            padding: 2rem;
+            background-image: radial-gradient(circle at 30% 20%, var(--primary-glow) 0%, transparent 60%);
         }
 
-        /* Animated dot matrix background */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background-image:
-                radial-gradient(circle at center, #1a1a1a 1.5px, transparent 1.5px);
-            background-size: var(--dot-spacing) var(--dot-spacing);
-            opacity: 0.6;
-            z-index: 0;
-        }
-
-        /* Subtle scan line effect */
-        body::after {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.1) 2px,
-                rgba(0, 0, 0, 0.1) 4px
-            );
-            pointer-events: none;
-            z-index: 1000;
-            opacity: 0.3;
-        }
-
-        /* Ambient glow in corners */
-        .ambient-glow {
-            position: fixed;
-            width: 600px;
-            height: 600px;
-            border-radius: 50%;
-            filter: blur(150px);
-            opacity: 0.08;
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .ambient-glow.top-right {
-            top: -300px;
-            right: -300px;
-            background: var(--primary-color);
-        }
-
-        .ambient-glow.bottom-left {
-            bottom: -300px;
-            left: -300px;
-            background: var(--primary-color);
-        }
-
-        .signup-container {
-            position: relative;
-            z-index: 10;
+        .card {
             background: var(--bg-card);
-            padding: 50px 45px;
             border: 1px solid var(--border-color);
             border-radius: 12px;
-            box-shadow:
-                0 0 60px var(--primary-glow),
-                0 25px 50px -12px rgba(0, 0, 0, 0.5),
-                inset 0 1px 0 rgba(255, 255, 255, 0.02);
-            text-align: center;
+            padding: 2.5rem;
+            max-width: 600px;
             width: 100%;
-            max-width: 440px;
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-
-            /* Entry animation */
-            animation: containerFadeIn 0.6s ease-out;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.6), 0 0 80px var(--primary-glow);
         }
 
-        @keyframes containerFadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px) scale(0.98);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-
-        /* The Dot Matrix Logo Effect */
-        .logo {
-            font-family: var(--font-display);
-            font-size: 3rem;
-            font-weight: 700;
-            margin: 0 0 8px 0;
-            text-transform: lowercase;
-            letter-spacing: 3px;
-            position: relative;
-
-            /* Fills the text with a dot pattern */
-            background-image: radial-gradient(circle, var(--primary-color) 1.5px, transparent 1.5px);
-            background-size: 5px 5px;
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-
-            /* Glow effect */
-            filter: drop-shadow(0 0 8px var(--primary-glow-strong));
-
-            /* Staggered reveal */
-            animation: logoReveal 0.8s ease-out 0.2s both;
-        }
-
-        @keyframes logoReveal {
-            from {
-                opacity: 0;
-                filter: drop-shadow(0 0 0 transparent);
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                filter: drop-shadow(0 0 8px var(--primary-glow-strong));
-                transform: translateY(0);
-            }
-        }
-
-        /* Tagline */
-        .tagline {
-            font-size: 0.7rem;
-            margin-top: 0;
-            margin-bottom: 28px;
-            color: var(--text-muted);
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            animation: fadeIn 0.6s ease-out 0.4s both;
-        }
-
-        /* Subtitle with blinking cursor */
-        .subtitle {
-            font-size: 0.85rem;
-            margin-top: -20px;
-            margin-bottom: 28px;
-            color: var(--text-dim);
-            letter-spacing: 1px;
-            font-family: var(--font-mono);
-            animation: fadeIn 0.6s ease-out 0.5s both;
-        }
-
-        .cursor {
-            display: inline-block;
-            animation: blink 1s step-end infinite;
+        h1 {
+            font-family: 'JetBrains Mono', monospace;
             color: var(--primary-color);
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
         }
 
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
-        }
-
-        /* Error message */
-        .error-message {
-            background: var(--error-glow);
-            border: 1px solid var(--error-color);
-            color: var(--error-color);
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 0.85rem;
-            text-align: left;
-            direction: rtl;
-            animation: errorShake 0.4s ease-out;
-        }
-
-        @keyframes errorShake {
-            0%, 100% { transform: translateX(0); }
-            20%, 60% { transform: translateX(-6px); }
-            40%, 80% { transform: translateX(6px); }
-        }
-
-        .error-message::before {
-            content: '> ';
-            color: var(--error-color);
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
-        /* Form groups */
-        .form-group {
-            margin-bottom: 20px;
-            text-align: left;
-            animation: formGroupSlide 0.5s ease-out both;
-        }
-
-        .form-group:nth-child(1) { animation-delay: 0.55s; }
-        .form-group:nth-child(2) { animation-delay: 0.65s; }
-        .form-group:nth-child(3) { animation-delay: 0.75s; }
-
-        @keyframes formGroupSlide {
-            from {
-                opacity: 0;
-                transform: translateX(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(0);
-            }
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 3px;
+        .lede {
             color: var(--text-dim);
-            font-weight: 500;
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
         }
 
-        .form-group label::before {
-            content: '// ';
-            color: var(--primary-dim);
+        label {
+            display: block;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
-        .form-group input {
+        input[type="text"] {
             width: 100%;
-            padding: 13px 16px;
             background: var(--bg-elevated);
             border: 1px solid var(--border-color);
-            color: var(--primary-color);
-            font-family: var(--font-mono);
-            font-size: 0.9rem;
-            outline: none;
-            transition: all 0.25s ease;
             border-radius: 6px;
+            padding: 0.9rem 1rem;
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
 
-        .form-group input::placeholder {
-            color: var(--text-muted);
-            opacity: 0.6;
-        }
-
-        .form-group input:focus {
+        input[type="text"]:focus {
+            outline: none;
             border-color: var(--primary-color);
-            box-shadow:
-                0 0 0 3px var(--primary-glow),
-                0 0 20px var(--primary-glow);
-            background: #000;
+            box-shadow: 0 0 0 3px var(--primary-glow);
         }
 
-        /* Email and password inputs: LTR */
-        .form-group input[name="email"],
-        .form-group input[name="password"] {
-            direction: ltr;
-            text-align: left;
-        }
-
-        /* Password strength indicator */
-        .password-strength {
-            margin-top: 8px;
-            height: 3px;
-            background: var(--border-color);
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .password-strength-bar {
-            height: 100%;
-            width: 0%;
-            transition: all 0.3s ease;
-            border-radius: 2px;
-        }
-
-        .password-strength-bar.weak { width: 33%; background: var(--error-color); }
-        .password-strength-bar.medium { width: 66%; background: #ffaa00; }
-        .password-strength-bar.strong { width: 100%; background: var(--success-color); }
-
-        .password-hint {
-            font-size: 0.65rem;
-            color: var(--text-muted);
-            margin-top: 6px;
-            letter-spacing: 0.5px;
-        }
-
-        /* Submit button */
-        .signup-btn {
+        button {
             width: 100%;
-            padding: 15px;
-            margin-top: 16px;
-            background: transparent;
-            color: var(--primary-color);
+            background: var(--primary-color);
+            border: none;
+            border-radius: 6px;
+            padding: 1rem;
+            color: var(--bg-color);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            cursor: pointer;
+            transition: background 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            background: var(--primary-dim);
+            box-shadow: 0 0 20px var(--primary-glow-strong);
+        }
+
+        .error {
+            background: rgba(255, 77, 109, 0.1);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 0.9rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+        }
+
+        .warning-box {
+            background: rgba(255, 170, 0, 0.08);
+            border: 1px solid var(--warning);
+            color: var(--warning);
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        .warning-box strong {
+            color: #ffdd88;
+        }
+
+        .url-box {
+            background: var(--bg-elevated);
             border: 1px solid var(--primary-color);
             border-radius: 6px;
-            font-family: var(--font-mono);
-            font-size: 0.85rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 4px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-            animation: buttonFadeIn 0.5s ease-out 0.85s both;
-        }
-
-        @keyframes buttonFadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .signup-btn::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: var(--primary-color);
-            transform: scaleX(0);
-            transform-origin: left;
-            transition: transform 0.3s ease;
-            z-index: -1;
-        }
-
-        .signup-btn:hover {
-            color: var(--bg-color);
-            box-shadow:
-                0 0 30px var(--primary-glow-strong),
-                0 0 60px var(--primary-glow);
-        }
-
-        .signup-btn:hover::before {
-            transform: scaleX(1);
-        }
-
-        .signup-btn:active {
-            transform: scale(0.98);
-        }
-
-        .signup-btn:focus-visible {
-            outline: 2px solid var(--primary-color);
-            outline-offset: 3px;
-        }
-
-        /* Loading state for HTMX */
-        .signup-btn.htmx-request {
-            opacity: 0.7;
-            pointer-events: none;
-        }
-
-        .signup-btn.htmx-request::after {
-            content: '...';
-            animation: loadingDots 1s infinite;
-        }
-
-        @keyframes loadingDots {
-            0%, 20% { content: '.'; }
-            40% { content: '..'; }
-            60%, 100% { content: '...'; }
-        }
-
-        /* Footer link */
-        .footer-link {
-            margin-top: 24px;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            animation: fadeIn 0.5s ease-out 0.95s both;
-        }
-
-        .footer-link a {
-            color: var(--primary-dim);
-            text-decoration: none;
-            border-bottom: 1px solid transparent;
-            transition: all 0.2s ease;
-        }
-
-        .footer-link a:hover {
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
             color: var(--primary-color);
-            border-bottom-color: var(--primary-color);
+            word-break: break-all;
+            box-shadow: 0 0 20px var(--primary-glow);
         }
 
-        /* Version badge */
-        .version {
-            position: absolute;
-            bottom: 14px;
-            right: 18px;
-            font-size: 0.6rem;
-            color: var(--text-muted);
-            opacity: 0.5;
-            letter-spacing: 1px;
+        .snippet {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.9rem 1rem;
+            margin: 0.5rem 0 1.25rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: #ccc;
+            overflow-x: auto;
+            white-space: pre;
         }
 
-        /* Status indicator */
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 16px;
-            font-size: 0.65rem;
-            color: var(--text-muted);
-            animation: fadeIn 0.5s ease-out 1s both;
+        h3 {
+            color: var(--primary-dim);
+            margin: 1.5rem 0 0.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
-        .status-dot {
-            width: 6px;
-            height: 6px;
-            background: var(--primary-color);
-            border-radius: 50%;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-                box-shadow: 0 0 0 0 var(--primary-glow-strong);
-            }
-            50% {
-                opacity: 0.6;
-                box-shadow: 0 0 0 4px transparent;
-            }
-        }
-
-        /* Responsive adjustments */
-        @media (max-width: 480px) {
-            .signup-container {
-                margin: 16px;
-                padding: 36px 24px;
-            }
-
-            .logo {
-                font-size: 2.4rem;
-            }
-
-            .tagline {
-                font-size: 0.6rem;
-            }
-        }
-
-        /* Reduced motion preference */
-        @media (prefers-reduced-motion: reduce) {
-            *,
-            *::before,
-            *::after {
-                animation-duration: 0.01ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: 0.01ms !important;
-            }
-        }
+        p { margin-bottom: 0.75rem; line-height: 1.5; color: #ccc; }
+        a { color: var(--primary-color); }
     </style>
 </head>
 <body>
-    <!-- Ambient glow effects -->
-    <div class="ambient-glow top-right"></div>
-    <div class="ambient-glow bottom-left"></div>
+    <div class="card">
+        {% if user_code %}
+            {# SUCCESS STATE: show the personal URL #}
+            <h1>Welcome, {{ display_name }}</h1>
+            <p class="lede">Your memory graph is live. Here's your personal URL:</p>
 
-    <div class="signup-container">
-        <h1 class="logo">qmemory</h1>
-        <p class="tagline">Graph Memory for AI Agents</p>
-        <div class="subtitle">system.create_user<span class="cursor">_</span></div>
+            <div class="warning-box">
+                <strong>⚠ Save this URL right now.</strong> It is the only way to access your memories. If you lose it, you lose your data. There is no recovery, no password reset, no email fallback.
+            </div>
 
-        {% if error %}
-        <div class="error-message">
-            {{ error }}
-        </div>
-        {% endif %}
+            <div class="url-box">{{ base_url }}/mcp/u/{{ user_code }}/</div>
 
-        <form
-            method="post"
-            action="/signup"
-            hx-post="/signup"
-            hx-target="body"
-            hx-swap="outerHTML"
-            hx-indicator=".signup-btn"
-            toolname="qmemory_signup"
-            tooldescription="Create a new qmemory account with name, email, and password"
-        >
-            <div class="form-group">
-                <label for="name">Name</label>
+            <h3>Connect from Claude Code</h3>
+            <div class="snippet">claude mcp add --transport http qmemory {{ base_url }}/mcp/u/{{ user_code }}/</div>
+
+            <h3>Connect from Claude.ai</h3>
+            <p>Open <strong>Settings → Connectors → Add custom connector</strong> and paste the URL above.</p>
+        {% else %}
+            {# FORM STATE: zero-friction signup #}
+            <h1>qmemory</h1>
+            <p class="lede">Graph memory for AI agents. Zero friction: pick a display name and you're in.</p>
+
+            {% if error %}
+            <div class="error">{{ error }}</div>
+            {% endif %}
+
+            <form method="post" action="/signup">
+                <label for="display_name">Display name</label>
                 <input
                     type="text"
-                    id="name"
-                    name="name"
+                    id="display_name"
+                    name="display_name"
                     required
-                    autocomplete="name"
-                    placeholder="Your name"
-                    toolparamname="name"
-                    toolparamdescription="Display name for the user account"
-                >
+                    minlength="1"
+                    maxlength="128"
+                    autofocus
+                    placeholder="e.g. Qusai"
+                />
+                <button type="submit">Create my memory graph</button>
+            </form>
+
+            <div class="warning-box" style="margin-top: 1.5rem;">
+                <strong>No email. No password.</strong> You'll get a secret URL — save it. If you lose the URL, you lose your data. This is a tool for friends and family, not a SaaS product.
             </div>
-
-            <div class="form-group">
-                <label for="email">Email</label>
-                <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    required
-                    autocomplete="email"
-                    placeholder="user@domain.com"
-                    toolparamname="email"
-                    toolparamdescription="User's email address for login and notifications"
-                >
-            </div>
-
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input
-                    type="password"
-                    id="password"
-                    name="password"
-                    required
-                    minlength="8"
-                    autocomplete="new-password"
-                    placeholder="••••••••"
-                    toolparamname="password"
-                    toolparamdescription="Account password (minimum 8 characters)"
-                >
-                <div class="password-strength">
-                    <div class="password-strength-bar" id="strength-bar"></div>
-                </div>
-                <p class="password-hint">min 8 characters</p>
-            </div>
-
-            <button type="submit" class="signup-btn">
-                Create Account
-            </button>
-        </form>
-
-        <p class="footer-link">
-            Already have an account? <a href="/login">Sign in →</a>
-        </p>
-
-        <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span>system ready</span>
-        </div>
-
-        <span class="version">v2.0</span>
+        {% endif %}
     </div>
-
-    <!-- Password strength indicator (vanilla JS) -->
-    <script>
-        const passwordInput = document.getElementById('password');
-        const strengthBar = document.getElementById('strength-bar');
-
-        if (passwordInput && strengthBar) {
-            passwordInput.addEventListener('input', function() {
-                const value = this.value;
-                let strength = '';
-
-                // Remove all classes
-                strengthBar.className = 'password-strength-bar';
-
-                if (value.length >= 8) {
-                    if (value.length >= 12 && /[A-Z]/.test(value) && /[0-9]/.test(value) && /[^A-Za-z0-9]/.test(value)) {
-                        strength = 'strong';
-                    } else if (value.length >= 8) {
-                        strength = 'medium';
-                    }
-                } else if (value.length > 0) {
-                    strength = 'weak';
-                }
-
-                if (strength) {
-                    strengthBar.classList.add(strength);
-                }
-            });
-        }
-    </script>
-
-    <!-- Fallback for non-HTMX browsers -->
-    <noscript>
-        <style>
-            .signup-btn.htmx-request::after { content: ''; }
-        </style>
-    </noscript>
 </body>
 </html>

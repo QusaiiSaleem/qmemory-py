@@ -320,135 +320,118 @@ async def login_submit(request: Request):
 
 @router.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request):
-    """Render the signup page."""
+    """Render the zero-friction signup page (display name only)."""
     logger.info("auth.signup_page_viewed")
-
-    # If already logged in, redirect to dashboard
-    if get_session_user(request):
-        return RedirectResponse(url="/dashboard", status_code=302)
-
     return templates.TemplateResponse(
         request,
         "pages/signup.html",
-        context={"user": None, "error": None},
+        context={"user": None, "error": None, "user_code": None, "base_url": _public_base_url(request)},
     )
 
 
 # ---------------------------------------------------------------------------
-# POST /signup — create new user
+# POST /signup — zero-friction: generate user_code + provision DB
 # ---------------------------------------------------------------------------
 
 
 @router.post("/signup", response_class=HTMLResponse)
 async def signup_submit(request: Request):
     """
-    Process the signup form submission.
-
-    1. Read name, email, password from the form
-    2. Call SurrealDB SIGNUP with the qmemory_user access method
-    3. If successful, store user info in session and redirect to /dashboard
-    4. If failed, re-render the signup page with an error message
+    Zero-friction signup:
+      1. Read display_name from the form
+      2. Generate a unique user_code
+      3. Provision the user's private database
+      4. Insert the admin user row pointing at that database
+      5. Render the signup page with the new personal URL (no session created)
     """
-    # Read the form data
     form = await request.form()
-    name = form.get("name", "").strip()
-    email = form.get("email", "").strip()
-    password = form.get("password", "")
+    display_name = form.get("display_name", "").strip()
 
-    logger.info("auth.signup_attempt email=%s", email)
+    logger.info("auth.signup_attempt display_name=%s", display_name)
 
-    # Basic validation
-    if not name or not email or not password:
-        logger.warning("auth.signup_failed reason=empty_fields email=%s", email)
+    if not display_name:
         return templates.TemplateResponse(
             request,
             "pages/signup.html",
-            context={"user": None, "error": "يرجى تعبئة جميع الحقول"},
-        )
-
-    if len(password) < 8:
-        logger.warning("auth.signup_failed reason=short_password email=%s", email)
-        return templates.TemplateResponse(
-            request,
-            "pages/signup.html",
-            context={"user": None, "error": "كلمة المرور يجب أن تكون 8 أحرف على الأقل"},
-        )
-
-    settings = get_app_settings()
-
-    # Try to create the user with SurrealDB
-    db = AsyncSurreal(settings.surreal_url)
-    try:
-        await db.connect()
-
-        # Call SurrealDB's SIGNUP using the DEFINE ACCESS qmemory_user
-        # This creates a new user record with Argon2-hashed password
-        token = await db.signup({
-            "namespace": settings.surreal_ns,
-            "database": settings.surreal_db,
-            "access": "qmemory_user",
-            "variables": {
-                "email": email,
-                "password": password,
-                "name": name,
+            context={
+                "user": None,
+                "error": "Please enter a display name.",
+                "user_code": None,
+                "base_url": _public_base_url(request),
             },
-        })
+        )
 
-        logger.info("auth.signup_success email=%s", email)
+    if len(display_name) > 128:
+        return templates.TemplateResponse(
+            request,
+            "pages/signup.html",
+            context={
+                "user": None,
+                "error": "Display name too long (max 128 characters).",
+                "user_code": None,
+                "base_url": _public_base_url(request),
+            },
+        )
 
-        # Decode the JWT to get user info
-        payload = _decode_jwt_payload(token)
-        user_info = _extract_user_from_jwt(payload)
+    # Import lazily — these touch SurrealDB at call time, keeps import-time fast.
+    from qmemory.app.user_code import generate_unique_user_code
+    from qmemory.db.client import apply_admin_schema, get_admin_db, query
+    from qmemory.db.provision import provision_user_db
 
-        # If JWT didn't have email/name, use what the user submitted
-        if not user_info["email"]:
-            user_info["email"] = email
-        if not user_info["name"]:
-            user_info["name"] = name
+    try:
+        # Ensure admin schema exists (idempotent)
+        async with get_admin_db() as admin:
+            await apply_admin_schema(admin)
 
-        # Create the user's private database with full memory schema
-        # TODO: Enable when provision.py is available
-        # try:
-        #     await provision_user_db(user_info["user_id"])
-        #     logger.info("auth.user_db_provisioned user_id=%s", user_info["user_id"])
-        # except Exception as exc:
-        #     logger.error(
-        #         "auth.user_db_provision_failed user_id=%s reason=%s",
-        #         user_info["user_id"],
-        #         exc,
-        #     )
-        #     # Don't fail signup — user can still use the web UI
-        #     # Database can be provisioned later on first MCP call
-        logger.info("auth.signup_complete user_id=%s (DB provisioning deferred)", user_info["user_id"])
+        user_code = await generate_unique_user_code()
+        db_name = await provision_user_db(user_code)
 
-        # Store user info in the session cookie
-        request.session["user_id"] = user_info["user_id"]
-        request.session["email"] = user_info["email"]
-        request.session["name"] = user_info["name"]
+        async with get_admin_db() as admin:
+            await query(
+                admin,
+                """CREATE user SET
+                    user_code = $code,
+                    display_name = $name,
+                    db_name = $db_name,
+                    is_active = true""",
+                {"code": user_code, "name": display_name, "db_name": db_name},
+            )
 
-        # Redirect to dashboard
-        return RedirectResponse(url="/dashboard", status_code=302)
+        logger.info("auth.signup_success user_code=%s db=%s", user_code, db_name)
+
+        return templates.TemplateResponse(
+            request,
+            "pages/signup.html",
+            context={
+                "user": None,
+                "error": None,
+                "user_code": user_code,
+                "display_name": display_name,
+                "base_url": _public_base_url(request),
+            },
+        )
 
     except Exception as exc:
-        error_msg = str(exc)
-        logger.warning("auth.signup_failed email=%s reason=%s", email, error_msg)
-
-        # Check for duplicate email error
-        if "unique" in error_msg.lower() or "already" in error_msg.lower():
-            error_display = "هذا البريد الإلكتروني مسجّل بالفعل"
-        else:
-            error_display = "حدث خطأ أثناء إنشاء الحساب. يرجى المحاولة مرة أخرى"
-
+        logger.exception("auth.signup_failed display_name=%s", display_name)
         return templates.TemplateResponse(
             request,
             "pages/signup.html",
-            context={"user": None, "error": error_display},
+            context={
+                "user": None,
+                "error": f"Something went wrong: {type(exc).__name__}. Please try again.",
+                "user_code": None,
+                "base_url": _public_base_url(request),
+            },
         )
-    finally:
-        try:
-            await db.close()
-        except Exception:
-            pass
+
+
+def _public_base_url(request: Request) -> str:
+    """Return https://mem0.qusai.org or the scheme+host of the current request."""
+    import os
+    override = os.environ.get("QMEMORY_PUBLIC_URL")
+    if override:
+        return override.rstrip("/")
+    return f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
 
 
 # ---------------------------------------------------------------------------
