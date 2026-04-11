@@ -60,7 +60,11 @@ class MCPUserMiddleware(BaseHTTPMiddleware):
         db_name = rows[0]["db_name"]
         logger.info("MCP request for user %s -> db=%s", user_code, db_name)
 
-        rewritten = "/mcp" + tail
+        # Rewrite to the internal MCP mount path `/_mcp` so the legacy
+        # /mcp/ 410 handler doesn't accidentally catch the rewritten request.
+        # The mounted FastMCP sub-app lives at `/_mcp` and is unreachable
+        # from outside except through this middleware.
+        rewritten = "/_mcp" + tail
         request.scope["path"] = rewritten
         request.scope["raw_path"] = rewritten.encode()
 

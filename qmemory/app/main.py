@@ -147,9 +147,14 @@ async def health_check():
     }
 
 
-@api.api_route("/mcp/", methods=["GET", "POST"], include_in_schema=False)
-async def legacy_mcp_root(request: Request):
-    """Legacy /mcp/ endpoint - now requires /mcp/u/{code}/. Returns 410 Gone."""
+@api.api_route("/mcp/{path:path}", methods=["GET", "POST"], include_in_schema=False)
+async def legacy_mcp(request: Request, path: str):
+    """Catch-all /mcp/... that isn't under /mcp/u/{code}/. Returns 410 Gone.
+
+    The MCPUserMiddleware intercepts /mcp/u/{code}/... requests BEFORE this
+    handler runs and rewrites them to /_mcp/... — so any request that still
+    hits this route is something we want to reject.
+    """
     return JSONResponse(
         {
             "error": "gone",
@@ -163,5 +168,8 @@ async def legacy_mcp_root(request: Request):
     )
 
 
-api.mount("/mcp", mcp_app)
+# Mount FastMCP sub-app at an internal path that is only reachable via the
+# MCPUserMiddleware path rewrite. This prevents the legacy /mcp/ handler
+# from accidentally catching rewritten requests.
+api.mount("/_mcp", mcp_app)
 logger.info("Qmemory Cloud app created - legacy /mcp/ returns 410, /mcp/u/{code}/ is live")

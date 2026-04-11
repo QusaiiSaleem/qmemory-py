@@ -39,8 +39,14 @@ def probe_app(monkeypatch):
     app = FastAPI()
     app.add_middleware(MCPUserMiddleware)
 
+    # Probe for the rewritten internal path — mimics the real /_mcp mount.
+    @app.get("/_mcp/{rest:path}")
+    async def probe_internal(rest: str):
+        return JSONResponse({"seen_path": f"/_mcp/{rest}", "user_db": _user_db.get()})
+
+    # Probe for non-rewritten external path — mimics a direct /mcp hit.
     @app.get("/mcp/{rest:path}")
-    async def probe(rest: str):
+    async def probe_external(rest: str):
         return JSONResponse({"seen_path": f"/mcp/{rest}", "user_db": _user_db.get()})
 
     return app
@@ -57,7 +63,8 @@ async def test_known_user_code_rewrites_path_and_sets_context(admin_with_test_us
         r = await c.get("/mcp/u/test-abc12/tools/list")
     assert r.status_code == 200
     data = r.json()
-    assert data["seen_path"] == "/mcp/tools/list"
+    # Middleware rewrites /mcp/u/{code}/tools/list -> /_mcp/tools/list
+    assert data["seen_path"] == "/_mcp/tools/list"
     assert data["user_db"] == "user_test-abc12"
 
 

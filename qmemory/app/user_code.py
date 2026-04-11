@@ -16,10 +16,18 @@ _SUFFIX_CHARS = string.ascii_lowercase + string.digits
 
 
 def generate_user_code() -> str:
-    """Return a new random user code. Does NOT check uniqueness."""
+    """Return a new random user code. Does NOT check uniqueness.
+
+    The suffix's FIRST character is always a lowercase letter. This avoids
+    a SurrealQL tokenizer edge case: `DEFINE DATABASE user_name-1abcd` is
+    parsed as `user_name - 1abcd` (number token followed by identifier)
+    which is a syntax error. A letter-first suffix keeps every user code
+    safe to use bare in DB statements.
+    """
     word = secrets.choice(WORDLIST)
-    suffix = "".join(secrets.choice(_SUFFIX_CHARS) for _ in range(5))
-    return f"{word}-{suffix}"
+    first = secrets.choice(string.ascii_lowercase)
+    rest = "".join(secrets.choice(_SUFFIX_CHARS) for _ in range(4))
+    return f"{word}-{first}{rest}"
 
 
 async def generate_unique_user_code(max_attempts: int = 10) -> str:
