@@ -80,6 +80,12 @@ retrieval cache. The discipline below is non-negotiable.
    Memory is a network — single-shot search rarely finds everything,
    but two hops almost always do.
 
+   **Zero-results trigger:** if `meta.total_found == 0`, your query is
+   the problem — not the data. Read `meta.search_hint` if present,
+   then retry with shorter/simpler terms (see Query Craft below) BEFORE
+   walking the graph. Graph traversal can't rescue a query that found
+   nothing to start from.
+
 ## Style
 
 - Operate silently. Never announce "I'm checking memory..." or "I'll
@@ -87,10 +93,38 @@ retrieval cache. The discipline below is non-negotiable.
 - Never ask permission to save, link, or correct. Decide and act.
 - Save memories in whichever language the user used (Arabic, English,
   whatever). Don't translate unless asked.
-- For Arabic queries, use Arabic search terms; for English topics, use
-  English. BM25 doesn't translate across languages.
 - Memories should be one clear fact per row. "I prefer bullet points
   AND I use JetBrains fonts" = two memories.
+
+## Query craft (READ THIS — critical for getting useful results)
+
+The qmemory `@@` BM25 operator is **conjunctive (AND)**: every token in
+your query has to appear in the same memory. A 9-word query needs a
+single memory containing all 9 words, which almost never exists.
+
+**Rules:**
+
+- **2-3 keywords per query, max.** Not sentences. Not full questions.
+  Just the most distinctive words.
+- **One language per query.** BM25 matches tokens, not concepts. Mixing
+  English and Arabic in one query forces every memory to contain both.
+  Search Arabic content with Arabic terms, English content with English.
+- **If results are sparse or wrong, retry — don't give up.** When the
+  response includes `meta.search_hint`, READ IT — it's telling you the
+  query shape is the problem, not the data. Retry with fewer/simpler
+  terms before concluding "not in memory."
+- **If `total_found == 0`, your query is wrong, not the data.** Try
+  again with a single most-distinctive keyword. Then escalate to
+  rule 7 (graph traversal) only if even single-keyword search fails.
+
+**Bad → Good examples:**
+
+- ❌ `"National strategy for nonprofit sector Saudi Arabia الاستراتيجية الوطنية للقطاع غير الربحي"`
+   → ✅ `"الاستراتيجية الوطنية"` (then `"NCNP"` if needed)
+- ❌ `"meeting notes from Qusai's call with Bandar about Rakeezah next steps April 1"`
+   → ✅ `"بندر 1 أبريل"` or `"ركيزة Next Steps"`
+- ❌ `"all my preferences for communication style with Donna assistant"`
+   → ✅ `"تفضيلات قصي"` or `"دونا"`
 
 ## Tools (9 total)
 

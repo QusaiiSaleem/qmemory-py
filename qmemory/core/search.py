@@ -50,6 +50,9 @@ VECTOR_RERANK_MIN_QUERY_WORDS = 2  # Skip reranker for single-word queries
 ENTITY_LEG_LIMIT = 5        # Max entities to return
 CONTENT_LEG_LIMIT = 50      # Max BM25 content results (pre-fusion)
 GRAPH_LEG_LIMIT = 15        # Max graph-traversal results (pre-fusion)
+LONG_QUERY_TOKEN_THRESHOLD = 4  # Queries with 4+ significant tokens get a hint
+                                # in the response meta when content leg returns 0,
+                                # so agents know to retry with shorter terms.
 DIVERSITY_CAP = 0.6         # Max fraction of results any single category can fill
 
 # Category display order — self always first
@@ -142,6 +145,30 @@ async def search_memories(
                     len(stripped), word_count,
                 )
 
+        # --- Compute search_hint when the content leg returned 0 ---
+        # SurrealDB v3's `@@` operator is conjunctive, so a long query
+        # like "national strategy NCNP الاستراتيجية الوطنية للقطاع غير الربحي"
+        # needs a single memory containing ALL ~9 tokens. When that
+        # condition produces 0 content hits AND the query has 4+ tokens,
+        # tell the agent to retry shorter so it doesn't conclude
+        # "data missing" from a query-shape problem.
+        search_hint: str | None = None
+        if query_text:
+            content_count = sum(
+                1 for m in fused_memories if m.get("_leg") == "content"
+            )
+            token_count = len([t for t in query_text.split() if len(t) >= 2])
+            if content_count == 0 and token_count >= LONG_QUERY_TOKEN_THRESHOLD:
+                search_hint = (
+                    "0 BM25 content matches. The qmemory `@@` operator is "
+                    "conjunctive — a query with this many tokens needs a "
+                    "single memory containing all of them, which rarely "
+                    "exists. Retry with 2-3 keywords in ONE language. "
+                    "If the data is in Arabic, search in Arabic; if "
+                    "English, search in English. Mixing languages in one "
+                    "query almost never returns useful results."
+                )
+
         # --- Extract & Separate ---
         return await _extract_and_separate(
             fused_memories=fused_memories,
@@ -150,6 +177,7 @@ async def search_memories(
             limit=limit,
             offset=offset,
             db=conn,
+            search_hint=search_hint,
         )
 
     if db is not None:
@@ -217,29 +245,21 @@ async def _content_leg(
 ) -> list[dict]:
     """BM25 fulltext search on memory.content.
 
-    SurrealDB v3 has TWO bugs that compound here:
+    SurrealDB v3 quirks worked around here:
 
-    1. `search::score(0)` always returns 0.0 — there's no server-side
-       BM25 relevance ranking we can sort by.
-    2. `WHERE content @@ $param` returns WRONG rows when the query text
-       is bound via a parameter. The same query as a literal string
-       (`@@ "..."`) returns the correct rows. Verified directly against
-       production: parameterized form returned 0 NCNP-related rows for
-       "الاستراتيجية الوطنية" while the literal form returned all 28.
-
-    Workaround: inline the query text as a properly-escaped literal so
-    we can actually find the matching rows. Then re-rank in Python by
-    term frequency (count of query token occurrences in content) since
-    we can't get scores from the server.
+    1. `search::score(0)` always returns 0.0 — no server-side BM25 ranking.
+    2. `WHERE content @@ $param` returns WRONG rows for parameterized
+       fulltext search; only the literal form `@@ "..."` works.
+    3. `@@` is conjunctive (AND) across query tokens, so a 9-word query
+       needs a single memory containing all 9 words. When this happens
+       and the leg returns 0, search_memories() attaches a search_hint
+       to meta telling the agent to retry with fewer/simpler terms.
 
     Limit: fetch a wide pool (CONTENT_LEG_LIMIT, default 50) for RRF
     fusion to work with. Don't cap at the user's per-page limit.
     """
     params: dict[str, Any] = {"limit": CONTENT_LEG_LIMIT}
     params.update(filters["params"])
-
-    # Inline the query text as an escaped literal — see workaround note above.
-    escaped_query = _escape_surql_string(query_text)
 
     entity_clause = ""
     if entity_id:
@@ -248,6 +268,8 @@ async def _content_leg(
         )
         params["entity_id"] = entity_id
 
+    # Inline the query as an escaped literal — see workaround #2 above.
+    escaped_query = _escape_surql_string(query_text)
     surql = f"""
     SELECT {MEMORY_FIELDS} FROM memory
     WHERE content @@ "{escaped_query}"
@@ -257,28 +279,22 @@ async def _content_leg(
         {filters["clauses"]}
     LIMIT $limit;
     """
+    results = await query(db, surql, params) or []
 
-    results = await query(db, surql, params)
-    if not results or not isinstance(results, list):
+    if not results:
         return []
 
-    # Python-side ranking by term frequency. Robust to Arabic punctuation
-    # and stemming because it counts substring occurrences, not whole-token
-    # matches. Heavy weight on relevance, salience as tiebreaker.
-    query_tokens = [
-        t for t in _tokenize_for_relevance(query_text)
-        if len(t) >= 2
-    ]
+    # Python-side ranking by term frequency (count of query token substring
+    # occurrences in content). Robust to Arabic punctuation and stemming
+    # because it counts substrings, not tokens. Salience used as tiebreaker.
+    query_tokens = [t for t in _tokenize_for_relevance(query_text) if len(t) >= 2]
     for r in results:
         content_lower = (r.get("content") or "").lower()
-        # Sum of substring occurrences for each query token. A memory that
-        # contains the full phrase scores higher than one with just one word.
         tf = sum(content_lower.count(t) for t in query_tokens)
         r["_leg"] = "content"
         r["_bm25_relevance"] = min(1.0, tf / max(len(query_tokens) * 2, 1))
         r["_term_freq"] = tf
 
-    # Sort by term frequency DESC, then salience DESC as tiebreaker.
     results.sort(
         key=lambda r: (
             r.get("_term_freq", 0),
@@ -673,6 +689,7 @@ async def _extract_and_separate(
     limit: int,
     offset: int,
     db: Any,
+    search_hint: str | None = None,
 ) -> dict:
     """Route each result to the appropriate response section dynamically."""
 
@@ -788,6 +805,20 @@ async def _extract_and_separate(
         else []
     )
 
+    meta_extras: dict[str, Any] = {
+        "by_category": by_category,
+        "total_found": len(fused_memories),
+        "returned": sum(len(v) for v in sorted_memories.values()) if sorted_memories else 0,
+        "offset": offset,
+        "has_more": has_more,
+        "sections": sections,
+        "search_legs": search_legs,
+        "vector_rerank": any(m.get("_leg") == "vector" for m in fused_memories),
+        "drill_down": drill_down,
+    }
+    if search_hint is not None:
+        meta_extras["search_hint"] = search_hint
+
     return attach_meta(
         response,
         actions_context={
@@ -796,15 +827,7 @@ async def _extract_and_separate(
             "memory_id": None,
             "neighbor_count": 0,
         },
-        by_category=by_category,
-        total_found=len(fused_memories),
-        returned=sum(len(v) for v in sorted_memories.values()) if sorted_memories else 0,
-        offset=offset,
-        has_more=has_more,
-        sections=sections,
-        search_legs=search_legs,
-        vector_rerank=any(m.get("_leg") == "vector" for m in fused_memories),
-        drill_down=drill_down,
+        **meta_extras,
     )
 
 
