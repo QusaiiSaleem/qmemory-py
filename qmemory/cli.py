@@ -159,7 +159,14 @@ async def _schema():
     default=False,
     help="Run one cycle and exit (for testing/cron).",
 )
-def worker(interval, once):
+@click.option(
+    "--all-users",
+    "all_users",
+    is_flag=True,
+    default=False,
+    help="Iterate every active user in the admin DB and run a cycle per user.",
+)
+def worker(interval, once, all_users):
     """Run the background worker (linker, dedup, linter, reflector, decay)."""
     import logging
 
@@ -170,7 +177,7 @@ def worker(interval, once):
     from qmemory.worker import run_worker
 
     try:
-        asyncio.run(run_worker(interval=interval, once=once))
+        asyncio.run(run_worker(interval=interval, once=once, all_users=all_users))
     except KeyboardInterrupt:
         click.echo("Worker stopped.")
 
