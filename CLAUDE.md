@@ -1,30 +1,56 @@
 # Qmemory
 
 Graph-based memory system for AI agents. Python rebuild (from TypeScript).
-Uses SurrealDB as a graph database, exposed via MCP (Claude Code) and NanoBot tools.
+Uses SurrealDB as a graph database, exposed via MCP for Claude Code (stdio)
+and Claude.ai (HTTP). Multi-user isolation via per-user SurrealDB databases
+routed by URL path: `/mcp/u/{user_code}/`.
 
 ## Commands
 
+**Always target the remote Railway SurrealDB.** Local SurrealDB is only for
+one-off debugging sessions; the canonical development and test target is the
+production instance at `wss://surrealdb-production-d9ea.up.railway.app`. Tests
+use the `qmemory_test` namespace (separate from `qmemory`), so they never touch
+production data.
+
+Export production credentials once per shell (or put them in a gitignored
+`.env` — pydantic-settings auto-loads it):
+
 ```bash
-# Tests (requires running SurrealDB)
-uv run pytest tests/                          # all tests (139 passing)
-uv run pytest tests/test_core/test_recall.py -v  # one file, verbose
+export QMEMORY_SURREAL_URL="wss://surrealdb-production-d9ea.up.railway.app"
+export QMEMORY_SURREAL_USER="root"
+export QMEMORY_SURREAL_PASS="$(railway variables --service surrealdb --json | jq -r .SURREAL_PASS)"
+```
+
+```bash
+# Tests — run against the remote DB in the qmemory_test namespace.
+.venv/bin/pytest tests/                       # full suite
+.venv/bin/pytest tests/test_core/test_recall.py -v
 
 # CLI
 qmemory status                  # check SurrealDB connection + record counts
-qmemory serve                   # MCP server (stdio for Claude Code)
-qmemory serve-http --port 3777  # MCP server (HTTP for Claude.ai)
+qmemory serve                   # MCP server (stdio, dev/testing only)
+qmemory serve-http --port 3777  # MCP server (HTTP, local)
 qmemory schema                  # apply DB schema (safe to re-run)
 qmemory worker --once           # run one maintenance cycle and exit
-qmemory worker --interval 3600  # run every hour (default: daily)
+qmemory worker --all-users --interval 3600  # hourly, iterate every active user
+
+# Admin (multi-user deployment)
+qmemory admin status                                       # admin DB + user count
+qmemory admin list-users                                   # show user routing table
+qmemory admin create-db --name <code>                      # provision user_{code}
+qmemory admin create-user --user-code <c> --display-name <n> --db-name <db>
 ```
 
 ## Prerequisites
 
-- Python 3.11+
-- SurrealDB running locally: `surreal start --user root --pass root`
-- `.env` file with keys (copy from `.env.example`):
-  - `QMEMORY_SURREAL_URL`, `QMEMORY_SURREAL_USER`, `QMEMORY_SURREAL_PASS`
+- Python 3.11+ (tests and code use 3.14 via `uv` but 3.11 is the minimum)
+- Access to the remote Railway SurrealDB (credentials via `railway variables --service surrealdb`).
+  Local SurrealDB is **not** the default target; it's only for offline debugging.
+- `.env` file in the project root (gitignored) with keys:
+  - `QMEMORY_SURREAL_URL=wss://surrealdb-production-d9ea.up.railway.app`
+  - `QMEMORY_SURREAL_USER=root`
+  - `QMEMORY_SURREAL_PASS=...` (from Railway)
   - `ANTHROPIC_API_KEY` (for LLM dedup)
   - `VOYAGE_API_KEY` (for embeddings)
 
@@ -52,22 +78,59 @@ surreal import -e "https://surrealdb-production-d9ea.up.railway.app" \
 **Railway env vars for SurrealDB service**: `PORT=8000`, `SURREAL_PASS`, `SURREAL_LOG=info`
 **Railway env vars for app service**: `QMEMORY_SURREAL_URL=ws://surrealdb.railway.internal:8000`
 
-### Multi-User Auth (Cloud Schema)
+### Multi-User Architecture (Per-User Database Isolation)
 
-Cloud schema adds user accounts, API tokens, and owner-based row isolation:
-- `schema_cloud.surql` — user table, `qmemory_user` access (Argon2), api_token table, owner fields
-- `schema_cloud_permissions.surql` — row-level permissions (owner = $auth isolation)
-- **Import order**: `schema.surql` → `schema_cloud.surql` → `schema_cloud_permissions.surql`
-- Root (MCP local mode) bypasses all permissions — sees everything
-- Record-level users only see memories/entities where `owner = $auth`
-- Tables with `PERMISSIONS NONE` silently return empty for non-root users — always use `OVERWRITE` when adding permissions
+**URL = auth.** Every user gets a personal URL of the form
+`https://mem0.qusai.org/mcp/u/{user_code}/` where `user_code` is a slug like
+`abacus-k7m3p`. The user code is both the identifier and the secret — whoever
+has the URL has full access. No email, no password, no token. Acceptable for
+friends-and-family scale; not a production multi-tenant SaaS model.
 
-### MCP Endpoint (Remote)
+**Database layout** (in `qmemory` namespace):
+- `qmemory.admin` — tiny routing directory. Contains only the `user` table
+  (fields: user_code, display_name, db_name, created_at, last_active_at, is_active).
+- `qmemory.user_<code>` — one full memory graph per user (memory, entity, relates,
+  session, message, scratchpad, health_report, books).
+- `qmemory.main` — legacy, read-only safety net preserved for 14 days
+  post-migration (2026-04-11 to 2026-04-25). **DO NOT DELETE before 2026-04-25.**
 
-- **URL**: `https://mem0.qusai.org/mcp/` (direct: `qmemory-api-production.up.railway.app/mcp/`)
-- **Auth**: None — MCP endpoint is open access (no token or OAuth required)
-- `/health` endpoint also open (for Railway health checks)
-- `mcp.http_app(path="/")` + `api.mount("/mcp", ...)` = clean `/mcp/` URL (not `/mcp/mcp/`)
+**Request routing**: `qmemory/app/middleware/user_context.py::MCPUserMiddleware`
+intercepts `/mcp/u/{code}/...` requests, looks up `db_name` in
+`qmemory.admin.user`, sets the `_user_db` ContextVar, rewrites the path to strip
+`/u/{code}`, and forwards to the mounted FastMCP sub-app. Core modules don't
+know multi-user exists — `get_db()` reads the ContextVar automatically.
+
+**Signup** (`/signup`): zero-friction. Generates a unique user_code from a
+filtered EFF word list (`qmemory/app/data/eff_large_wordlist.txt` minus
+`excluded_words.txt`, ~7400 words), provisions `user_{code}` via
+`provision_user_db()`, inserts the admin row, returns the personal URL inline.
+No session is created.
+
+**Legacy `/mcp/` endpoint**: returns HTTP 410 Gone with a pointer to `/signup`.
+Only `/mcp/u/{code}/...` is live.
+
+**Worker**: runs on Railway as a dedicated `qmemory-worker` service with start
+command `qmemory worker --interval 3600 --all-users`. The worker queries
+`admin.user WHERE is_active=true`, sets `_user_db` ContextVar per iteration,
+and runs one maintenance cycle (linker → dedup → decay → reflector → linter)
+per active user. See `scripts/railway-worker-setup.md` for the setup runbook.
+
+### Transports
+
+**stdio** (local dev/testing only): `qmemory serve`. Reads `QMEMORY_SURREAL_DB`
+env var for the target database. Not intended for daily use.
+
+**HTTP** (everyone, including Qusai's own Claude Code): mounted at `/mcp/u/{code}/`.
+Configure in Claude Code with:
+```
+claude mcp add --transport http qmemory https://mem0.qusai.org/mcp/u/{code}/
+```
+In Claude.ai: Settings → Connectors → Add custom connector → paste the URL.
+
+The HTTP server uses the official `mcp.server.fastmcp.FastMCP` (1.x, bundled
+with the Anthropic `mcp` SDK). The jlowin `fastmcp` package is NOT used — do
+not re-add it; the single-package rule is structural and prevents the old
+"update tools in two places" drift.
 
 ## Gotchas
 
