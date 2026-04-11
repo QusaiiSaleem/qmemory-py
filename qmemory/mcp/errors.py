@@ -26,12 +26,12 @@ async def safe_tool(
 ) -> str:
     """Invoke an MCP tool handler with uniform error handling."""
     start = time.monotonic()
-    logger.info("Tool call: %s(%s)", name, _scrub_for_log(validated))
+    logger.info("tool.call name=%s args=%s", name, _scrub_for_log(validated))
 
     try:
         result = await handler(validated)
     except Exception as exc:
-        logger.exception("Unhandled exception in %s", name)
+        logger.exception("tool.error name=%s", name)
         error_text = (
             f"Internal error in {name}: {type(exc).__name__}. "
             "Check server logs for details."
@@ -45,14 +45,24 @@ async def safe_tool(
         )
 
     elapsed = time.monotonic() - start
-    logger.info("%s completed in %.2fs", name, elapsed)
+    logger.info("tool.done name=%s elapsed=%.2fs", name, elapsed)
     return json.dumps(result, default=str, ensure_ascii=False)
 
 
-def _scrub_for_log(model: BaseModel) -> dict:
-    """Return a short, log-safe dict of the input."""
+def _scrub_for_log(model: BaseModel) -> str:
+    """Return a single-line, compact JSON string of the input.
+
+    Long string values are truncated. The result is JSON so it sits on
+    one line in production logs (no Rich pretty-printing wrap).
+    """
     data = model.model_dump()
-    for k, v in list(data.items()):
+    cleaned: dict = {}
+    for k, v in data.items():
         if isinstance(v, str) and len(v) > 120:
-            data[k] = v[:117] + "..."
-    return data
+            cleaned[k] = v[:117] + "..."
+        elif v is None:
+            # Skip nulls — they're just noise in the log line.
+            continue
+        else:
+            cleaned[k] = v
+    return json.dumps(cleaned, ensure_ascii=False, default=str, separators=(",", ":"))

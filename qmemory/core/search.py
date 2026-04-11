@@ -45,6 +45,8 @@ HYPOTHESIS_THRESHOLD = 0.5  # Confidence below this = hypothesis
 TOP_N_ENRICH = 5            # How many results to enrich with graph
 MAX_HINTS_PER_RESULT = 3    # Max neighbor hints per result
 VECTOR_RERANK_THRESHOLD = 5 # Only fire vector if BM25 returns fewer than this
+VECTOR_RERANK_MIN_QUERY_CHARS = 6  # Skip reranker for queries shorter than this
+VECTOR_RERANK_MIN_QUERY_WORDS = 2  # Skip reranker for single-word queries
 ENTITY_LEG_LIMIT = 5        # Max entities to return
 CONTENT_LEG_LIMIT = 50      # Max BM25 content results (pre-fusion)
 GRAPH_LEG_LIMIT = 15        # Max graph-traversal results (pre-fusion)
@@ -112,10 +114,33 @@ async def search_memories(
         fused_memories = _rrf_fuse(content_results, graph_results)
 
         # --- Optional vector reranker ---
+        # Only fires when ALL of these hold:
+        #   1. There IS a query (not just "fetch recent")
+        #   2. BM25 + graph found fewer than VECTOR_RERANK_THRESHOLD candidates
+        #   3. The query has substance: at least 2 words AND >= 6 chars
+        #
+        # The third gate exists because vector reranking on near-empty queries
+        # like "test" or "x" runs cosine similarity over the entire embedding
+        # space (no useful BM25 candidates to seed from), which on the remote
+        # SurrealDB took 193 seconds for one call in production. Single-token
+        # queries don't benefit from semantic rescue — if BM25 didn't find
+        # anything, vector won't either.
         if query_text and len(fused_memories) < VECTOR_RERANK_THRESHOLD:
-            fused_memories = await _vector_rerank(
-                query_text, fused_memories, filters, limit, conn
-            )
+            stripped = (query_text or "").strip()
+            word_count = len(stripped.split())
+            if (
+                len(stripped) >= VECTOR_RERANK_MIN_QUERY_CHARS
+                and word_count >= VECTOR_RERANK_MIN_QUERY_WORDS
+            ):
+                fused_memories = await _vector_rerank(
+                    query_text, fused_memories, filters, limit, conn
+                )
+            else:
+                logger.debug(
+                    "search.vector_rerank_skipped reason=query_too_thin "
+                    "len=%d words=%d",
+                    len(stripped), word_count,
+                )
 
         # --- Extract & Separate ---
         return await _extract_and_separate(

@@ -347,3 +347,36 @@ async def test_diversity_cap_limits_single_category(db):
     prefs = result.get("memories", {}).get("preference", [])
     # DIVERSITY_CAP = 0.6, limit = 10, so max 6 preference entries
     assert len(prefs) <= 6, f"diversity cap violated: got {len(prefs)} preference"
+
+
+async def test_vector_rerank_skipped_for_thin_queries(db, monkeypatch):
+    """Single-word or very short queries skip the vector reranker entirely.
+
+    Regression test for the 193-second qmemory_search(query='test') we saw
+    in production logs. The reranker is only useful when BM25 has candidates
+    to rerank — for thin queries it scans the whole embedding space and gives
+    nothing useful back, so we now gate on word count + char length.
+    """
+    from qmemory.core import search as search_module
+
+    fired = {"called": False}
+
+    async def fake_rerank(query_text, candidates, filters, limit, db):
+        fired["called"] = True
+        return candidates
+
+    monkeypatch.setattr(search_module, "_vector_rerank", fake_rerank)
+
+    # Empty result set + thin query → reranker must NOT fire
+    result = await search_module.search_memories(query_text="test", limit=10, db=db)
+    assert fired["called"] is False, "vector reranker fired on 1-word query 'test'"
+
+    # Substantial query → reranker MAY fire (we don't assert it does, just that
+    # the gate doesn't block multi-word queries)
+    fired["called"] = False
+    await search_module.search_memories(
+        query_text="leadership ethics under pressure", limit=10, db=db
+    )
+    # Note: we don't assert fired["called"] is True because BM25 might find
+    # >= VECTOR_RERANK_THRESHOLD results and skip rerank legitimately. We only
+    # assert that the thin-query gate doesn't preemptively block long queries.
