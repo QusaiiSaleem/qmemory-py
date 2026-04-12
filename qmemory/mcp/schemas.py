@@ -122,6 +122,55 @@ class PersonInput(BaseModel):
     contacts: list[dict] | None = Field(default=None, max_length=20)
 
 
+class AddBookInput(BaseModel):
+    model_config = _BASE_CONFIG
+
+    # Mode 1 — Create Book (when book_id is None)
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        description="Book title. Required when creating a new book.",
+    )
+    author: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Author name. Stored as an alias on the book entity.",
+    )
+    category: _Category = Field(
+        default="domain",
+        description="Memory category for all sections of this book.",
+    )
+    salience: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Importance weight for all sections (0.0-1.0).",
+    )
+
+    # Mode 2 — Add Section (when book_id is provided)
+    book_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Book entity ID from Mode 1. Required when adding a section.",
+    )
+    section: str | None = Field(
+        default=None,
+        max_length=512,
+        description="Section name (e.g. 'Chapter 1: Start'). Required with book_id.",
+    )
+    section_index: int | None = Field(
+        default=None,
+        ge=1,
+        description="Order position (1, 2, 3...). Required with book_id.",
+    )
+    content: str | None = Field(
+        default=None,
+        max_length=16000,
+        description="Section content text. Max 16,000 chars. Required with book_id.",
+    )
+
+
 class BooksInput(BaseModel):
     model_config = _BASE_CONFIG
     book_id: str | None = Field(default=None, max_length=128)
