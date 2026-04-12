@@ -10,11 +10,11 @@ from qmemory.mcp.operations import OPERATIONS
 from qmemory.mcp.registry import mount_operations
 
 
-def test_mount_registers_nine_tools():
+def test_mount_registers_ten_tools():
     mcp = FastMCP("test_mount")
     mount_operations(mcp, OPERATIONS)
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 9
+    assert len(tools) == 10
 
 
 def test_mount_tool_names_match_operations():

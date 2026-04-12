@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from qmemory.mcp.operations import OPERATIONS
 from qmemory.mcp.schemas import (
+    AddBookInput,
     BooksInput,
     BootstrapInput,
     CorrectInput,
@@ -16,8 +17,8 @@ from qmemory.mcp.schemas import (
 )
 
 
-def test_exactly_nine_operations_defined():
-    assert len(OPERATIONS) == 9
+def test_exactly_ten_operations_defined():
+    assert len(OPERATIONS) == 10
 
 
 def test_all_operation_names_are_unique():
@@ -51,6 +52,7 @@ def test_every_operation_has_input_model():
         "qmemory_link": LinkInput,
         "qmemory_person": PersonInput,
         "qmemory_books": BooksInput,
+        "qmemory_add_book": AddBookInput,
         "qmemory_health": HealthInput,
     }
     for op in OPERATIONS:
