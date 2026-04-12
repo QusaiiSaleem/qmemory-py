@@ -86,6 +86,12 @@ retrieval cache. The discipline below is non-negotiable.
    walking the graph. Graph traversal can't rescue a query that found
    nothing to start from.
 
+8. ADD BOOKS PROPERLY — use qmemory_add_book in two phases: create
+   book first (returns book_id), then add sections one at a time.
+   Read 10-20 pages, rewrite clearly, save. Check
+   qmemory_books(book_id) to see which sections exist and resume
+   from where you left off.
+
 ## Style
 
 - Operate silently. Never announce "I'm checking memory..." or "I'll
@@ -126,7 +132,7 @@ single memory containing all 9 words, which almost never exists.
 - ❌ `"all my preferences for communication style with Donna assistant"`
    → ✅ `"تفضيلات قصي"` or `"دونا"`
 
-## Tools (9 total)
+## Tools (10 total)
 
 - qmemory_bootstrap — load full context (rule 1, every session)
 - qmemory_search    — find by free-text query (rule 2)
@@ -136,6 +142,7 @@ single memory containing all 9 words, which almost never exists.
 - qmemory_link      — relate two nodes with a typed edge (rule 4)
 - qmemory_person    — create or find a person entity (rule 6)
 - qmemory_books     — browse the user's book library hierarchically
+- qmemory_add_book  — add books: create entity, then add sections one at a time (rule 8)
 - qmemory_health    — read the latest worker health report
 
 Bootstrap. Then act.
@@ -235,6 +242,37 @@ async def _books(i: schemas.BooksInput) -> dict:
     if i.book_id:
         return await list_sections(book_id=i.book_id)
     return await list_books(query_text=i.query)
+
+
+async def _add_book(i: schemas.AddBookInput) -> dict:
+    from qmemory.core.add_book import add_section, create_book
+
+    if i.book_id:
+        # Mode 2 — Add Section
+        if not i.section:
+            raise ValueError("section is required when book_id is provided")
+        if i.section_index is None:
+            raise ValueError("section_index is required when book_id is provided")
+        if not i.content:
+            raise ValueError("content is required when book_id is provided")
+        return await add_section(
+            book_id=i.book_id,
+            section=i.section,
+            section_index=i.section_index,
+            content=i.content,
+            category=i.category,
+            salience=i.salience,
+        )
+    else:
+        # Mode 1 — Create Book
+        if not i.title:
+            raise ValueError("title is required to create a book")
+        return await create_book(
+            title=i.title,
+            author=i.author,
+            category=i.category,
+            salience=i.salience,
+        )
 
 
 async def _health(i: schemas.HealthInput) -> dict:
@@ -380,6 +418,45 @@ OPERATIONS: list[Operation] = [
             openWorldHint=False,
         ),
         handler=_books,
+    ),
+    Operation(
+        name="qmemory_add_book",
+        description=(
+            "Add a book to your knowledge library in two steps:\n\n"
+            "STEP 1 — Create the book (once):\n"
+            "  qmemory_add_book(title=\"Book Name\", author=\"Author Name\")\n"
+            "  → Returns book_id. Save this for Step 2.\n\n"
+            "STEP 2 — Add sections (repeat per section):\n"
+            "  qmemory_add_book(book_id=\"entity:...\", section=\"Chapter 1\",\n"
+            "                    section_index=1, content=\"...\")\n"
+            "  → Saves content as a memory linked to the book.\n\n"
+            "WORKFLOW for processing a PDF:\n"
+            "  1. Read 10-20 pages at a time\n"
+            "  2. Identify the section/chapter name\n"
+            "  3. Rewrite the content clearly (clean up OCR noise, fix formatting)\n"
+            "  4. Call this tool with book_id + section + section_index + content\n"
+            "  5. Repeat until done\n\n"
+            "RESUMING after interruption:\n"
+            "  Call qmemory_books(book_id=\"entity:...\") to see which sections\n"
+            "  already exist. Skip those and continue from the next section_index.\n\n"
+            "DUPLICATE PROTECTION:\n"
+            "  If you add a section with the same name twice, the tool returns\n"
+            "  action=\"SKIPPED\". Safe to retry.\n\n"
+            "CONTENT GUIDELINES:\n"
+            "  - One section per call (a chapter, a major heading, or ~10 pages)\n"
+            "  - Max 16,000 characters per call\n"
+            "  - Write in the book's original language (Arabic stays Arabic)\n"
+            "  - Include key ideas, not word-for-word transcription\n"
+            "  - The agent's job is to READ and REWRITE — not copy-paste raw text"
+        ),
+        input_model=schemas.AddBookInput,
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        handler=_add_book,
     ),
     Operation(
         name="qmemory_health",
