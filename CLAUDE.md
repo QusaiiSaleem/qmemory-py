@@ -242,19 +242,19 @@ surrealdb/           # Railway SurrealDB service (separate container)
 - The `db` fixture in `tests/conftest.py` applies schema, yields connection, then `REMOVE NAMESPACE` on cleanup.
 - 9 known failing tests — all the same issue: SurrealDB v3 edge queries with `<-.id` syntax and `WHERE in = type::record(...)` return empty. Core logic works; it's a SurrealDB v3 syntax change.
 
-## MCP Tools (9 total)
+## MCP Tools (10 total)
 
 Two transports: **stdio** (Claude Code local, `qmemory serve`) and **HTTP** (Claude.ai + remote Claude Code, `https://mem0.qusai.org/mcp/u/{user_code}/`).
 
 **IMPORTANT**: All 9 tools are defined in a single place — `qmemory/mcp/operations.py`. Both `qmemory/mcp/server.py` (stdio) and `qmemory/app/main.py` (HTTP) mount them via `qmemory.mcp.registry.mount_operations(mcp, OPERATIONS)`. Edit `operations.py` once; both transports pick it up automatically. Pydantic input models live in `qmemory/mcp/schemas.py` and enforce every parameter's type, range, and enum constraints. Error handling goes through `qmemory/mcp/errors.py::safe_tool()` — handlers never raise through the transport layer.
 
-### Server-level instructions (the 7 behavioral rules)
+### Server-level instructions (the 8 behavioral rules)
 
 The MCP `instructions` field is sent to clients on `initialize` — once per session, not per tool call. Claude.ai and Claude Code treat it as a connector-level system prompt, so behavioral rules encoded here apply to **every user, every project, automatically** — no per-project copy-paste needed on the Claude.ai side.
 
 **Single source of truth:** `qmemory/mcp/operations.py::QMEMORY_INSTRUCTIONS` (a module-level string constant). Both transports import it. Updates ship with `git push` → Railway redeploy → next session sees the new rules.
 
-**The 7 non-negotiable rules currently encoded:**
+**The 8 non-negotiable rules currently encoded:**
 
 1. **BOOTSTRAP FIRST** — every conversation, before any other action
 2. **SEARCH BEFORE ANSWERING** — never guess what's in memory
@@ -263,6 +263,7 @@ The MCP `instructions` field is sent to clients on `initialize` — once per ses
 5. **CORRECT, DON'T DUPLICATE** — supersede via `qmemory_correct`
 6. **CREATE PERSON ENTITIES** — first mention of any named human
 7. **FOLLOW THE GRAPH WHEN RESULTS ARE THIN** — two-hop traversal via `qmemory_get(include_neighbors=true, neighbor_depth=2)` rescues searches that missed direct matches
+8. **ADD BOOKS PROPERLY** — use `qmemory_add_book` in two phases: create book, then add sections one at a time
 
 Plus a Style section: silent operation, no permission-asking, language-preserving (Arabic stays Arabic), and one-fact-per-memory discipline.
 
@@ -289,6 +290,7 @@ The current instructions string is ~3,700 characters (~900 tokens) — substanti
 | `qmemory_link` | No | Create relationship edge between any nodes |
 | `qmemory_person` | No | Create/find person with linked identities |
 | `qmemory_books` | Yes | Browse books: list books → sections → content |
+| `qmemory_add_book` | No | Add books: create entity, then add sections one at a time |
 | `qmemory_health` | Yes | Check graph health — orphans, stale, gaps, quality |
 
 ## Book Knowledge
