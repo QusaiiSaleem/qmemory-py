@@ -88,6 +88,56 @@ class TestListSections:
         assert ch1["chunk_count"] == 2
 
 
+    async def test_sections_ordered_by_section_index(self, db):
+        """Sections with section_index should come back in index order, not alphabetical."""
+        book_id = generate_id("ent")
+        await query(db, f"""
+            CREATE entity:`{book_id}` SET
+                name = 'Ordered Book',
+                type = 'book',
+                created_at = time::now(),
+                updated_at = time::now(),
+                aliases = []
+        """)
+
+        # Create sections OUT of alphabetical order but WITH section_index
+        for mem_id_suffix, section, idx in [
+            (generate_id("mem"), "Conclusion", 3),
+            (generate_id("mem"), "Introduction", 1),
+            (generate_id("mem"), "Body", 2),
+        ]:
+            await query(db, f"""
+                CREATE memory:`{mem_id_suffix}` SET
+                    content = $content,
+                    section = $section,
+                    section_index = {idx},
+                    category = 'domain',
+                    salience = 0.5,
+                    scope = 'global',
+                    confidence = 0.8,
+                    is_active = true,
+                    linked = true,
+                    evidence_type = 'reported',
+                    recall_count = 0,
+                    created_at = time::now(),
+                    updated_at = time::now()
+            """, {"content": f"[Ordered Book > {section}] Content.", "section": section})
+
+            edge_id = generate_id("rel")
+            await query(db, f"""
+                RELATE memory:`{mem_id_suffix}`->relates->entity:`{book_id}` SET
+                    id = relates:`{edge_id}`,
+                    type = 'from_book',
+                    confidence = 1.0,
+                    created_by = 'agent',
+                    created_at = time::now()
+            """)
+
+        result = await list_sections(book_id=f"entity:{book_id}", db=db)
+        names = [s["name"] for s in result["sections"]]
+        assert names == ["Introduction", "Body", "Conclusion"], f"Expected ordered by index, got {names}"
+
+
 class TestReadSection:
     async def test_returns_section_content(self, db):
         book_id = await _seed_book(db)

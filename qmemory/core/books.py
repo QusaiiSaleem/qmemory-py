@@ -103,11 +103,13 @@ async def list_sections(
         # Step 2: group by section using direct ID lookup
         id_list = ", ".join(str(mid) for mid in mem_ids)
         sections = await query(conn, f"""
-            SELECT section, count() AS chunk_count
+            SELECT section,
+                math::min(section_index) AS section_index,
+                count() AS chunk_count
             FROM [{id_list}]
             WHERE section IS NOT NONE
             GROUP BY section
-            ORDER BY section
+            ORDER BY section_index, section
         """)
 
         from qmemory.formatters.response import attach_meta
@@ -119,7 +121,11 @@ async def list_sections(
             )
 
         section_list = [
-            {"name": s.get("section", "Unknown"), "chunk_count": s.get("chunk_count", 0)}
+            {
+                "name": s.get("section", "Unknown"),
+                "section_index": s.get("section_index"),
+                "chunk_count": s.get("chunk_count", 0),
+            }
             for s in sections if isinstance(s, dict)
         ]
         return attach_meta(
