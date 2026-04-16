@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Graph Explorer — Qmemory{% endblock %}
 
+{% block head_extra %}
+<!-- Cytoscape.js core + fcose layout plugin — must load before Alpine init -->
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+{% endblock %}
+
 {% block content %}
 <!-- Override the default main-content max-width for full-screen graph -->
 <style>
@@ -383,12 +391,6 @@
         </template>
     </aside>
 </div>
-
-<!-- Cytoscape.js + fcose layout plugin -->
-<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
-<script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
-<script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
-<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 
 <script>
 // ── Color maps ──

@@ -10,6 +10,8 @@
     <!-- Alpine.js for reactive components -->
     <script src="https://unpkg.com/alpinejs@3" defer></script>
 
+    {% block head_extra %}{% endblock %}
+
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -799,7 +801,7 @@
         <div class="nav-links">
             <a href="/dashboard" class="nav-link {% if request.url.path == '/dashboard' %}active{% endif %}">Dashboard</a>
             <a href="/memories" class="nav-link {% if '/memories' in request.url.path %}active{% endif %}">Memories</a>
-            <a href="/graph" class="nav-link {% if request.url.path == '/graph' %}active{% endif %}">Graph</a>
+            <a href="/graph" hx-boost="false" class="nav-link {% if request.url.path == '/graph' %}active{% endif %}">Graph</a>
             <a href="/connect" class="nav-link {% if request.url.path == '/connect' %}active{% endif %}">Connect</a>
         </div>
 
