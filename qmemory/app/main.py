@@ -29,6 +29,7 @@ from qmemory.app.middleware.user_context import MCPUserMiddleware
 from qmemory.app.routes.auth import get_session_user, router as auth_router
 from qmemory.app.routes.connect import router as connect_router
 from qmemory.app.routes.dashboard import router as dashboard_router
+from qmemory.app.routes.graph import router as graph_router
 from qmemory.app.routes.memories import router as memories_router
 from qmemory.db.client import is_healthy
 from qmemory.mcp.operations import OPERATIONS, QMEMORY_INSTRUCTIONS
@@ -168,6 +169,7 @@ logger.info("SessionUserMiddleware registered - web UI reads db_name from sessio
 api.include_router(auth_router)
 api.include_router(connect_router)
 api.include_router(dashboard_router)
+api.include_router(graph_router)
 api.include_router(memories_router)
 
 

@@ -1,0 +1,679 @@
+{% extends "base.html" %}
+{% block title %}Graph Explorer — Qmemory{% endblock %}
+
+{% block content %}
+<!-- Override the default main-content max-width for full-screen graph -->
+<style>
+    /* Full-screen graph layout — override .main-content constraints */
+    .main-content {
+        max-width: 100% !important;
+        padding: 0 !important;
+        margin-top: var(--nav-height) !important;
+        height: calc(100vh - var(--nav-height));
+        overflow: hidden;
+    }
+
+    .graph-container {
+        display: flex;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    /* Left sidebar — filters & info */
+    .graph-sidebar {
+        width: 280px;
+        background: var(--bg-card);
+        border-left: 1px solid var(--border-color);
+        overflow-y: auto;
+        flex-shrink: 0;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .graph-sidebar.collapsed {
+        width: 40px;
+        padding: 8px;
+    }
+
+    .sidebar-section {
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 12px;
+    }
+
+    .sidebar-section:last-child {
+        border-bottom: none;
+    }
+
+    .sidebar-title {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 10px;
+    }
+
+    /* Center — graph canvas */
+    .graph-canvas-wrap {
+        flex: 1;
+        position: relative;
+        background: var(--bg-color);
+    }
+
+    #cy {
+        position: absolute;
+        inset: 0;
+    }
+
+    .graph-controls {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        display: flex;
+        gap: 6px;
+        z-index: 10;
+    }
+
+    .graph-btn {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        color: var(--text-secondary);
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        transition: all 0.2s ease;
+    }
+
+    .graph-btn:hover {
+        border-color: var(--primary-color);
+        color: var(--primary-color);
+        box-shadow: 0 0 10px var(--primary-glow);
+    }
+
+    .graph-stats-badge {
+        position: absolute;
+        bottom: 12px;
+        left: 12px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        z-index: 10;
+    }
+
+    .graph-loading {
+        position: absolute;
+        inset: 0;
+        background: rgba(5, 5, 5, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 20;
+    }
+
+    /* Right panel — node detail */
+    .graph-detail {
+        width: 360px;
+        background: var(--bg-card);
+        border-right: 1px solid var(--border-color);
+        overflow-y: auto;
+        flex-shrink: 0;
+        transition: width 0.3s ease;
+    }
+
+    .graph-detail.collapsed {
+        width: 40px;
+    }
+
+    .detail-toggle {
+        width: 100%;
+        padding: 8px;
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 0.8rem;
+        text-align: center;
+    }
+
+    .detail-toggle:hover {
+        color: var(--primary-color);
+    }
+
+    #detail-panel {
+        padding: 16px;
+    }
+
+    /* Search bar in sidebar */
+    .graph-search {
+        width: 100%;
+        padding: 8px 12px;
+        background: var(--bg-input);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        font-family: var(--font-arabic);
+        font-size: 0.85rem;
+        color: var(--text-primary);
+        outline: none;
+        transition: border-color 0.2s;
+    }
+
+    .graph-search:focus {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px var(--primary-glow);
+    }
+
+    /* Filter buttons */
+    .filter-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        cursor: pointer;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        transition: color 0.2s;
+    }
+
+    .filter-row:hover {
+        color: var(--primary-color);
+    }
+
+    .filter-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .filter-label {
+        flex: 1;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+    }
+
+    .filter-count {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        color: var(--text-muted);
+    }
+
+    /* Header stat badges */
+    .stat-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.5px;
+    }
+
+    .stat-badge.memories {
+        background: rgba(0, 255, 170, 0.1);
+        color: var(--primary-color);
+        border: 1px solid rgba(0, 255, 170, 0.3);
+    }
+
+    .stat-badge.entities {
+        background: rgba(168, 85, 247, 0.1);
+        color: var(--cat-preference);
+        border: 1px solid rgba(168, 85, 247, 0.3);
+    }
+
+    .stat-badge.links {
+        background: rgba(59, 130, 246, 0.1);
+        color: var(--cat-context);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    /* Responsive: hide sidebars on small screens */
+    @media (max-width: 900px) {
+        .graph-sidebar { display: none; }
+        .graph-detail { width: 100%; position: absolute; right: 0; top: 0; bottom: 0; z-index: 15; display: none; }
+    }
+</style>
+
+<div class="graph-container" x-data="graphApp()">
+
+    <!-- LEFT SIDEBAR: Filters & Legend -->
+    <aside class="graph-sidebar" :class="{ collapsed: sidebarCollapsed }">
+
+        <template x-if="!sidebarCollapsed">
+            <div>
+                <!-- Stats -->
+                <div class="sidebar-section">
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                        <span class="stat-badge memories">{{ memory_count }} memories</span>
+                        <span class="stat-badge entities">{{ entity_count }} entities</span>
+                        <span class="stat-badge links">{{ links_count }} links</span>
+                    </div>
+                </div>
+
+                <!-- Search -->
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Search</div>
+                    <input type="text"
+                           class="graph-search"
+                           placeholder="Search memories..."
+                           x-model="searchQuery"
+                           @keydown.enter="searchGraph()"
+                           @input.debounce.500ms="searchQuery.length >= 2 ? searchGraph() : loadGraph()">
+                </div>
+
+                <!-- Legend: Memory categories -->
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Memory Categories</div>
+                    <div @click="filterByCategory('self')" class="filter-row">
+                        <span class="filter-dot" style="background: #00ffaa;"></span>
+                        <span class="filter-label">self</span>
+                    </div>
+                    <div @click="filterByCategory('style')" class="filter-row">
+                        <span class="filter-dot" style="background: #ff6b9d;"></span>
+                        <span class="filter-label">style</span>
+                    </div>
+                    <div @click="filterByCategory('preference')" class="filter-row">
+                        <span class="filter-dot" style="background: #a855f7;"></span>
+                        <span class="filter-label">preference</span>
+                    </div>
+                    <div @click="filterByCategory('context')" class="filter-row">
+                        <span class="filter-dot" style="background: #3b82f6;"></span>
+                        <span class="filter-label">context</span>
+                    </div>
+                    <div @click="filterByCategory('decision')" class="filter-row">
+                        <span class="filter-dot" style="background: #f59e0b;"></span>
+                        <span class="filter-label">decision</span>
+                    </div>
+                    <div @click="filterByCategory('idea')" class="filter-row">
+                        <span class="filter-dot" style="background: #10b981;"></span>
+                        <span class="filter-label">idea</span>
+                    </div>
+                    <div @click="filterByCategory('feedback')" class="filter-row">
+                        <span class="filter-dot" style="background: #ef4444;"></span>
+                        <span class="filter-label">feedback</span>
+                    </div>
+                    <div @click="filterByCategory('domain')" class="filter-row">
+                        <span class="filter-dot" style="background: #6b7280;"></span>
+                        <span class="filter-label">domain</span>
+                    </div>
+                </div>
+
+                <!-- Legend: Entity types -->
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Entity Types</div>
+                    <div @click="filterByType('entity')" class="filter-row">
+                        <span class="filter-dot" style="background: #06b6d4;"></span>
+                        <span class="filter-label">person</span>
+                    </div>
+                    <div @click="filterByType('entity')" class="filter-row">
+                        <span class="filter-dot" style="background: #8b5cf6;"></span>
+                        <span class="filter-label">book</span>
+                    </div>
+                    <div @click="filterByType('entity')" class="filter-row">
+                        <span class="filter-dot" style="background: #ec4899;"></span>
+                        <span class="filter-label">concept</span>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Actions</div>
+                    <button @click="loadGraph()" class="btn btn-primary btn-sm" style="width: 100%; margin-bottom: 8px;">
+                        Reload Graph
+                    </button>
+                    <button @click="loadGraph('entity')" class="btn btn-ghost btn-sm" style="width: 100%;">
+                        Entities Only
+                    </button>
+                </div>
+            </div>
+        </template>
+
+        <button @click="sidebarCollapsed = !sidebarCollapsed"
+                style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem;"
+                x-text="sidebarCollapsed ? '>' : '<'"></button>
+    </aside>
+
+    <!-- CENTER: Graph Canvas -->
+    <main class="graph-canvas-wrap">
+        <div id="cy"></div>
+
+        <!-- Controls -->
+        <div class="graph-controls">
+            <button @click="cy && cy.fit()" class="graph-btn">Fit</button>
+            <button @click="cy && cy.zoom(cy.zoom() * 1.3)" class="graph-btn">+</button>
+            <button @click="cy && cy.zoom(cy.zoom() * 0.7)" class="graph-btn">-</button>
+            <button @click="relayout()" class="graph-btn">Relayout</button>
+        </div>
+
+        <!-- Stats badge -->
+        <div class="graph-stats-badge" x-text="`${nodeCount} nodes | ${edgeCount} edges`"></div>
+
+        <!-- Loading overlay -->
+        <div class="graph-loading" x-show="loading" x-transition>
+            <div style="text-align: center;">
+                <div class="loading-spinner" style="margin: 0 auto 12px;"></div>
+                <div style="color: var(--text-muted); font-family: var(--font-mono); font-size: 0.8rem;">
+                    Loading graph...
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- RIGHT: Detail Panel -->
+    <aside class="graph-detail" :class="{ collapsed: detailCollapsed }">
+        <button @click="detailCollapsed = !detailCollapsed" class="detail-toggle"
+                x-text="detailCollapsed ? '<' : '>'"></button>
+
+        <template x-if="!detailCollapsed">
+            <div id="detail-panel">
+                <div class="empty-state" style="padding: 32px 16px;">
+                    <div class="empty-state-title">Select a node</div>
+                    <div class="empty-state-desc">Click a node in the graph to see its details</div>
+                </div>
+            </div>
+        </template>
+    </aside>
+</div>
+
+<!-- Cytoscape.js + fcose layout plugin -->
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+
+<script>
+// ── Color maps ──
+
+const CATEGORY_COLORS = {
+    self:       '#00ffaa',
+    style:      '#ff6b9d',
+    preference: '#a855f7',
+    context:    '#3b82f6',
+    decision:   '#f59e0b',
+    idea:       '#10b981',
+    feedback:   '#ef4444',
+    domain:     '#6b7280',
+};
+
+const ENTITY_TYPE_COLORS = {
+    person:  '#06b6d4',
+    book:    '#8b5cf6',
+    concept: '#ec4899',
+};
+
+function getNodeColor(ele) {
+    if (ele.data('type') === 'memory') {
+        return CATEGORY_COLORS[ele.data('category')] || '#6b7280';
+    }
+    if (ele.data('type') === 'entity') {
+        return ENTITY_TYPE_COLORS[ele.data('entity_type')] || '#06b6d4';
+    }
+    return '#6b7280';
+}
+
+function getNodeSize(ele) {
+    if (ele.data('type') === 'entity') return 40;
+    // Memories: size scales with salience (20-35px)
+    const salience = ele.data('salience') || 0.5;
+    return 20 + (salience * 15);
+}
+
+// ── Alpine.js app ──
+
+function graphApp() {
+    return {
+        cy: null,
+        loading: false,
+        nodeCount: 0,
+        edgeCount: 0,
+        selectedNode: null,
+        searchQuery: '',
+        sidebarCollapsed: false,
+        detailCollapsed: false,
+
+        init() {
+            this.cy = cytoscape({
+                container: document.getElementById('cy'),
+                style: [
+                    // Node base style
+                    {
+                        selector: 'node',
+                        style: {
+                            'label': 'data(label)',
+                            'font-family': 'Cairo, sans-serif',
+                            'font-size': '10px',
+                            'color': '#a0a0a0',
+                            'text-wrap': 'wrap',
+                            'text-max-width': '120px',
+                            'text-valign': 'bottom',
+                            'text-margin-y': 6,
+                            'background-color': function(ele) { return getNodeColor(ele); },
+                            'width': function(ele) { return getNodeSize(ele); },
+                            'height': function(ele) { return getNodeSize(ele); },
+                            'border-width': 2,
+                            'border-color': '#1a1a1a',
+                            'overlay-opacity': 0,
+                        },
+                    },
+                    // Entity nodes: diamond shape
+                    {
+                        selector: 'node[type="entity"]',
+                        style: {
+                            'shape': 'diamond',
+                            'font-weight': 'bold',
+                            'font-size': '11px',
+                            'color': '#e0e0e0',
+                        },
+                    },
+                    // Selected node
+                    {
+                        selector: 'node:selected',
+                        style: {
+                            'border-width': 4,
+                            'border-color': '#00ffaa',
+                            'overlay-opacity': 0.1,
+                            'overlay-color': '#00ffaa',
+                        },
+                    },
+                    // Highlighted (search match)
+                    {
+                        selector: 'node[?highlight]',
+                        style: {
+                            'border-width': 3,
+                            'border-color': '#f59e0b',
+                            'border-style': 'solid',
+                        },
+                    },
+                    // Edge base style
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 1.5,
+                            'line-color': '#2a2a2a',
+                            'target-arrow-color': '#3a3a3a',
+                            'target-arrow-shape': 'triangle',
+                            'curve-style': 'bezier',
+                            'label': 'data(label)',
+                            'font-size': '8px',
+                            'font-family': 'Cairo, JetBrains Mono, monospace',
+                            'text-rotation': 'autorotate',
+                            'text-opacity': 0.5,
+                            'color': '#555',
+                            'overlay-opacity': 0,
+                        },
+                    },
+                    // Selected edge
+                    {
+                        selector: 'edge:selected',
+                        style: {
+                            'width': 3,
+                            'line-color': '#00ffaa',
+                            'target-arrow-color': '#00ffaa',
+                            'text-opacity': 1,
+                            'color': '#00ffaa',
+                        },
+                    },
+                ],
+                layout: { name: 'fcose', padding: 50, animate: true, animationDuration: 600 },
+                wheelSensitivity: 0.3,
+            });
+
+            // ── Single click: show detail panel ──
+            this.cy.on('tap', 'node', (evt) => {
+                const nodeId = evt.target.id();
+                this.selectedNode = nodeId;
+                const [table, ...rest] = nodeId.split(':');
+                const recordId = rest.join(':');
+                htmx.ajax('GET', `/api/graph/node/${table}/${recordId}`, {
+                    target: '#detail-panel',
+                    swap: 'innerHTML',
+                });
+                // Open detail panel if collapsed
+                this.detailCollapsed = false;
+            });
+
+            // ── Double click: expand neighbors ──
+            this.cy.on('dbltap', 'node', (evt) => {
+                this.expandNode(evt.target.id());
+            });
+
+            // Load the full graph
+            this.loadGraph();
+        },
+
+        async loadGraph(filterType) {
+            this.loading = true;
+            this.searchQuery = '';
+            let url = '/api/graph?limit=500';
+            if (filterType) url += '&types=' + filterType;
+
+            try {
+                const resp = await fetch(url);
+                const data = await resp.json();
+                this.cy.elements().remove();
+                this.cy.add(data.nodes);
+                this.cy.add(data.edges);
+                this.runLayout();
+                this.nodeCount = data.stats.node_count;
+                this.edgeCount = data.stats.edge_count;
+            } catch (e) {
+                console.error('Graph load error:', e);
+            }
+            this.loading = false;
+        },
+
+        async expandNode(nodeId) {
+            this.loading = true;
+            const [table, ...rest] = nodeId.split(':');
+            const recordId = rest.join(':');
+
+            try {
+                const resp = await fetch(`/api/graph/expand/${table}/${recordId}`);
+                const data = await resp.json();
+
+                if (data.nodes.length === 0) {
+                    // No neighbors — show detail instead
+                    htmx.ajax('GET', `/api/graph/node/${table}/${recordId}`, {
+                        target: '#detail-panel',
+                        swap: 'innerHTML',
+                    });
+                    this.detailCollapsed = false;
+                    this.loading = false;
+                    return;
+                }
+
+                // Add only new nodes
+                const existingIds = new Set(this.cy.nodes().map(n => n.id()));
+                const newNodes = data.nodes.filter(n => !existingIds.has(n.data.id));
+                this.cy.add(newNodes);
+                this.cy.add(data.edges);
+
+                this.runLayout();
+                this.nodeCount = this.cy.nodes().length;
+                this.edgeCount = this.cy.edges().length;
+            } catch (e) {
+                console.error('Expand error:', e);
+            }
+            this.loading = false;
+        },
+
+        async searchGraph() {
+            if (!this.searchQuery || this.searchQuery.length < 2) return;
+            this.loading = true;
+
+            try {
+                const resp = await fetch('/api/graph/search?q=' + encodeURIComponent(this.searchQuery));
+                const data = await resp.json();
+
+                if (!data.nodes || data.nodes.length === 0) {
+                    this.loading = false;
+                    return;
+                }
+
+                this.cy.elements().remove();
+                this.cy.add(data.nodes);
+                this.cy.add(data.edges);
+                this.runLayout();
+                this.nodeCount = data.stats.node_count;
+                this.edgeCount = data.stats.edge_count;
+            } catch (e) {
+                console.error('Search error:', e);
+            }
+            this.loading = false;
+        },
+
+        filterByCategory(cat) {
+            // Load graph filtered by category
+            this.loading = true;
+            this.searchQuery = '';
+            fetch('/api/graph?limit=500&category=' + cat)
+                .then(r => r.json())
+                .then(data => {
+                    this.cy.elements().remove();
+                    this.cy.add(data.nodes);
+                    this.cy.add(data.edges);
+                    this.runLayout();
+                    this.nodeCount = data.stats.node_count;
+                    this.edgeCount = data.stats.edge_count;
+                    this.loading = false;
+                })
+                .catch(e => {
+                    console.error('Filter error:', e);
+                    this.loading = false;
+                });
+        },
+
+        filterByType(type) {
+            this.loadGraph(type);
+        },
+
+        relayout() {
+            this.runLayout();
+        },
+
+        runLayout() {
+            this.cy.layout({
+                name: 'fcose',
+                animate: true,
+                animationDuration: 600,
+                padding: 40,
+                nodeRepulsion: function() { return 5000; },
+                idealEdgeLength: function() { return 80; },
+                edgeElasticity: function() { return 0.45; },
+                packComponents: true,
+                quality: 'default',
+            }).run();
+        },
+    };
+}
+</script>
+{% endblock %}

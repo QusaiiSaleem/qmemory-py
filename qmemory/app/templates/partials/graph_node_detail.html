@@ -1,0 +1,162 @@
+<!-- Node detail panel — loaded via HTMX into #detail-panel -->
+
+{% if node._table == "memory" %}
+<!-- ============================
+     MEMORY NODE DETAIL
+     ============================ -->
+
+{% set category = node.category or "domain" %}
+<div style="margin-bottom: 16px;">
+    <span class="memory-category {{ category }}">{{ category }}</span>
+    {% if node.source_type and node.source_type != "conversation" %}
+    <span style="font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-muted); margin-right: 8px;">
+        {{ node.source_type }}
+    </span>
+    {% endif %}
+</div>
+
+<!-- Content -->
+<div style="color: var(--text-primary); font-size: 0.9rem; line-height: 1.7; margin-bottom: 16px;">
+    {{ node.content }}
+</div>
+
+<!-- Metadata grid -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;">
+    <div>
+        <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">Salience</div>
+        <div style="font-family: var(--font-display); font-size: 1.2rem; color: var(--primary-color); font-weight: 600;">
+            {{ '%.2f' % node.salience if node.salience else '0.50' }}
+        </div>
+    </div>
+    <div>
+        <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">Confidence</div>
+        <div style="font-family: var(--font-display); font-size: 1.2rem; color: var(--text-secondary); font-weight: 600;">
+            {{ '%.2f' % node.confidence if node.confidence else '0.80' }}
+        </div>
+    </div>
+    <div>
+        <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">Recalled</div>
+        <div style="font-family: var(--font-mono); font-size: 0.9rem; color: var(--text-secondary);">
+            {{ node.recall_count or 0 }}x
+        </div>
+    </div>
+    <div>
+        <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">Scope</div>
+        <div style="font-family: var(--font-mono); font-size: 0.9rem; color: var(--text-secondary);">
+            {{ node.scope or 'global' }}
+        </div>
+    </div>
+</div>
+
+<!-- Extra fields -->
+<div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); margin-bottom: 12px;">
+    {% if node.evidence_type %}
+    <div style="margin-bottom: 4px;">Evidence: <span style="color: var(--text-secondary);">{{ node.evidence_type }}</span></div>
+    {% endif %}
+    {% if node.section %}
+    <div style="margin-bottom: 4px;">Section: <span style="color: var(--text-secondary);">{{ node.section }}</span></div>
+    {% endif %}
+    {% if node.context_mood %}
+    <div style="margin-bottom: 4px;">Mood: <span style="color: var(--text-secondary);">{{ node.context_mood }}</span></div>
+    {% endif %}
+    <div style="margin-bottom: 4px;">Created: <span style="color: var(--text-secondary); direction: ltr; display: inline-block;">{{ (node.created_at|string)[:19] if node.created_at else '—' }}</span></div>
+</div>
+
+<!-- ID (copyable) -->
+<div style="margin-bottom: 16px;">
+    <div class="code-block" style="font-size: 0.7rem; padding: 8px 12px; direction: ltr; text-align: left;">
+        {{ node_id }}
+    </div>
+</div>
+
+{% elif node._table == "entity" %}
+<!-- ============================
+     ENTITY NODE DETAIL
+     ============================ -->
+
+{% set etype = node.type or "concept" %}
+<div style="margin-bottom: 16px;">
+    <span style="display: inline-block; font-family: var(--font-mono); font-size: 0.6rem; padding: 4px 10px; border-radius: 4px; text-transform: uppercase; letter-spacing: 1px;
+        {% if etype == 'person' %}background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid #06b6d4;
+        {% elif etype == 'book' %}background: rgba(139, 92, 246, 0.15); color: #8b5cf6; border: 1px solid #8b5cf6;
+        {% else %}background: rgba(236, 72, 153, 0.15); color: #ec4899; border: 1px solid #ec4899;
+        {% endif %}">
+        {{ etype }}
+    </span>
+</div>
+
+<!-- Name -->
+<div style="font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin-bottom: 12px;">
+    {{ node.name }}
+</div>
+
+<!-- Aliases -->
+{% if node.aliases and node.aliases|length > 0 %}
+<div style="margin-bottom: 12px;">
+    <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Aliases</div>
+    <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+        {% for alias in node.aliases %}
+        <span style="font-size: 0.75rem; background: var(--bg-elevated); border: 1px solid var(--border-color); padding: 2px 8px; border-radius: 4px; color: var(--text-secondary);">
+            {{ alias }}
+        </span>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- External links -->
+{% if node.external_url %}
+<div style="margin-bottom: 8px;">
+    <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">External</div>
+    <div style="font-size: 0.8rem;">
+        <span style="color: var(--text-muted);">{{ node.external_source or 'link' }}:</span>
+        <span style="color: var(--primary-color); direction: ltr; display: inline-block;">{{ node.external_url }}</span>
+    </div>
+</div>
+{% endif %}
+
+<!-- Dates -->
+<div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); margin-bottom: 12px;">
+    <div>Created: <span style="color: var(--text-secondary); direction: ltr; display: inline-block;">{{ (node.created_at|string)[:19] if node.created_at else '—' }}</span></div>
+</div>
+
+<!-- ID -->
+<div style="margin-bottom: 16px;">
+    <div class="code-block" style="font-size: 0.7rem; padding: 8px 12px; direction: ltr; text-align: left;">
+        {{ node_id }}
+    </div>
+</div>
+
+{% endif %}
+
+<!-- ============================
+     RELATIONSHIPS (for both types)
+     ============================ -->
+{% if neighbors and neighbors|length > 0 %}
+<div style="border-top: 1px solid var(--border-color); padding-top: 12px;">
+    <div style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">
+        Relationships ({{ neighbors|length }})
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+        {% for n in neighbors %}
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg-elevated); border-radius: 4px; cursor: pointer; transition: background 0.2s;"
+             onmouseover="this.style.background='rgba(0,255,170,0.05)'"
+             onmouseout="this.style.background='var(--bg-elevated)'"
+             onclick="
+                 var parts = '{{ n.id }}'.split(':');
+                 htmx.ajax('GET', '/api/graph/node/' + parts[0] + '/' + parts.slice(1).join(':'), {target: '#detail-panel', swap: 'innerHTML'});
+             ">
+            <span style="font-size: 0.7rem; color: var(--text-muted);">
+                {{ '→' if n.direction == 'outgoing' else '←' }}
+            </span>
+            <span style="font-family: var(--font-mono); font-size: 0.6rem; padding: 2px 6px; border-radius: 3px; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--primary-dim);">
+                {{ n.type }}
+            </span>
+            <span style="font-size: 0.7rem; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr;">
+                {{ n.id }}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
