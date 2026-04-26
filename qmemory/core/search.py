@@ -948,89 +948,114 @@ async def _find_book_linked_memories(
 async def _enrich_with_graph(
     memories: list[dict], db: Any
 ) -> list[dict]:
-    """Attach graph context (entities, related memories) to top results."""
+    """Attach graph context (entities, related memories) to top results.
+
+    Single batched query: `FROM [memory:m1, memory:m2, ...]` projects the
+    same arrow expressions for every input memory in one round-trip.
+    Replaces the previous per-memory loop (one query per top result).
+    Failures are logged and the affected memory is left without `_graph`.
+    """
     if not memories:
         return memories
 
+    # Collect IDs and build the FROM list. Memory IDs come from our own
+    # DB layer (already normalized); follows the same inline-record-ref
+    # pattern used in qmemory/core/get.py::_get_impl.
     enriched = list(memories)
+    indexed = [(i, str(m.get("id", ""))) for i, m in enumerate(enriched)]
+    valid = [(i, mid) for i, mid in indexed if mid]
+    if not valid:
+        return enriched
 
-    for i, mem in enumerate(enriched):
-        mid = str(mem.get("id", ""))
-        if not mid:
+    id_list = ", ".join(mid for _, mid in valid)
+    # SurrealDB v3 quirk: `SELECT id, ... FROM [r1, r2]` returns id=None
+    # for every row (the planner doesn't preserve the row record id when
+    # FROM is a list of explicit records). Project `meta::id(id)` instead
+    # and rebuild the full record id ourselves so we can stitch results
+    # back to the input memories by id (not by position — defensive in
+    # case a memory is deleted between SELECT and the response).
+    surql = f"""
+    SELECT
+        meta::id(id) AS _row_id,
+        ->relates->entity.{{id, name, type}} AS out_entities,
+        <-relates<-entity.{{id, name, type}} AS in_entities,
+        ->relates.{{type, out}} AS out_edges,
+        <-relates.{{type, in}} AS in_edges,
+        ->relates->memory.{{id, content}} AS out_memories,
+        <-relates<-memory.{{id, content}} AS in_memories
+    FROM [{id_list}]
+    """
+
+    try:
+        rows = await query(db, surql)
+    except Exception as ex:
+        logger.debug("Graph enrichment batch failed (non-fatal): %s", ex)
+        return enriched
+
+    if not rows or not isinstance(rows, list):
+        return enriched
+
+    # Map row by full record id (memory:<row_id>).
+    by_id: dict[str, dict] = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("_row_id"):
+            by_id[f"memory:{row['_row_id']}"] = row
+
+    for i, mid in valid:
+        data = by_id.get(mid)
+        if not data:
             continue
 
-        try:
-            surql = f"""
-            SELECT
-                ->relates->entity.{{id, name, type}} AS out_entities,
-                <-relates<-entity.{{id, name, type}} AS in_entities,
-                ->relates.{{type, out}} AS out_edges,
-                <-relates.{{type, in}} AS in_edges,
-                ->relates->memory.{{id, content}} AS out_memories,
-                <-relates<-memory.{{id, content}} AS in_memories
-            FROM {mid}
-            """
-            rows = await query(db, surql)
-            if not rows or not isinstance(rows, list) or len(rows) == 0:
+        # Build edge type map
+        edge_type_map: dict[str, str] = {}
+        for edge in (data.get("out_edges") or []):
+            if isinstance(edge, dict):
+                edge_type_map[str(edge.get("out", ""))] = edge.get("type", "relates")
+        for edge in (data.get("in_edges") or []):
+            if isinstance(edge, dict):
+                edge_type_map[str(edge.get("in", ""))] = edge.get("type", "relates")
+
+        # Build entity list
+        entities: list[dict] = []
+        seen_entities: set[str] = set()
+        for e in (data.get("out_entities") or []) + (data.get("in_entities") or []):
+            if not isinstance(e, dict) or not e.get("id"):
                 continue
+            eid = str(e["id"])
+            if eid in seen_entities:
+                continue
+            seen_entities.add(eid)
+            entities.append({
+                "id": eid,
+                "name": e.get("name", ""),
+                "edge": edge_type_map.get(eid, "relates"),
+            })
 
-            data = rows[0] if isinstance(rows[0], dict) else {}
+        # Build related memories list
+        related: list[dict] = []
+        seen_mems: set[str] = set()
+        for m in (data.get("out_memories") or []) + (data.get("in_memories") or []):
+            if not isinstance(m, dict) or not m.get("id"):
+                continue
+            rid = str(m["id"])
+            if rid in seen_mems or rid == mid:
+                continue
+            seen_mems.add(rid)
+            related.append({
+                "id": rid,
+                "preview": (m.get("content") or "")[:80],
+                "edge": edge_type_map.get(rid, "relates"),
+            })
+            if len(related) >= MAX_HINTS_PER_RESULT:
+                break
 
-            # Build edge type map
-            edge_type_map: dict[str, str] = {}
-            for edge in (data.get("out_edges") or []):
-                if isinstance(edge, dict):
-                    edge_type_map[str(edge.get("out", ""))] = edge.get("type", "relates")
-            for edge in (data.get("in_edges") or []):
-                if isinstance(edge, dict):
-                    edge_type_map[str(edge.get("in", ""))] = edge.get("type", "relates")
-
-            # Build entity list
-            entities: list[dict] = []
-            seen_entities: set[str] = set()
-            for e in (data.get("out_entities") or []) + (data.get("in_entities") or []):
-                if not isinstance(e, dict) or not e.get("id"):
-                    continue
-                eid = str(e["id"])
-                if eid in seen_entities:
-                    continue
-                seen_entities.add(eid)
-                entities.append({
-                    "id": eid,
-                    "name": e.get("name", ""),
-                    "edge": edge_type_map.get(eid, "relates"),
-                })
-
-            # Build related memories list
-            related: list[dict] = []
-            seen_mems: set[str] = set()
-            for m in (data.get("out_memories") or []) + (data.get("in_memories") or []):
-                if not isinstance(m, dict) or not m.get("id"):
-                    continue
-                rid = str(m["id"])
-                if rid in seen_mems or rid == mid:
-                    continue
-                seen_mems.add(rid)
-                related.append({
-                    "id": rid,
-                    "preview": (m.get("content") or "")[:80],
-                    "edge": edge_type_map.get(rid, "relates"),
-                })
-                if len(related) >= MAX_HINTS_PER_RESULT:
-                    break
-
-            enriched[i] = {
-                **mem,
-                "_graph": {
-                    "entities": entities,
-                    "related": related,
-                    "from_book": None,
-                },
-            }
-
-        except Exception as ex:
-            logger.debug(
-                "Graph enrichment failed for %s (non-fatal): %s", mid, ex
-            )
+        enriched[i] = {
+            **enriched[i],
+            "_graph": {
+                "entities": entities,
+                "related": related,
+                "from_book": None,
+            },
+        }
 
     return enriched
