@@ -155,105 +155,225 @@ async def _attach_neighbors(
     depth: int,
     db: Any,
 ) -> None:
-    """Fetch graph neighbors for each memory and attach them in place."""
+    """Fetch graph neighbors (depth 1 or 2) and attach in place.
 
-    # Fetch neighbors for each memory individually to avoid cross-table FROM issues
-    all_rows: list[dict] = []
-    for mem in memories:
-        mid = mem["id"]
-        # Use direct record reference instead of FROM [list]
-        neighbor_surql = f"""
-        SELECT id,
-            ->relates.{{id, type, out}} AS out_edges,
-            <-relates.{{id, type, in}} AS in_edges,
-            ->relates->memory.{{id, content, category, salience}} AS out_memories,
-            ->relates->entity.{{id, name, type}} AS out_entities,
-            <-relates<-memory.{{id, content, category, salience}} AS in_memories,
-            <-relates<-entity.{{id, name, type}} AS in_entities
-        FROM {mid}
-        """
-        rows = await query(db, neighbor_surql)
-        if rows and isinstance(rows, list):
-            all_rows.extend(rows)
+    Strategy: 1 batched query per depth level (not per input memory).
 
-    if not all_rows:
+    Step 1 — Fetch direct (depth-1) neighbors for every input id in one
+             query: `FROM [id1, id2, ...]` projects the same arrow
+             expressions for every row.
+    Step 2 — If depth >= 2: collect the depth-1 neighbor ids, batch the
+             same projection on those, then stitch second-degree
+             neighbors back to the originating input memory with
+             `depth: 2` and `via: <d1 neighbor id>` so the agent can
+             trace the path.
+
+    SurrealDB v3 quirk: `SELECT id, ... FROM [r1, r2]` returns id=None
+    for every row (the planner doesn't preserve the row record id when
+    FROM is a list of explicit records). Use `meta::id(id)` and rebuild
+    the full record id with `_id_with_prefix()` so we can stitch results
+    by id rather than by position (defensive in case a row is missing).
+    """
+    if not memories:
         return
 
-    rows = all_rows
+    input_ids = [m["id"] for m in memories if m.get("id")]
+    if not input_ids:
+        return
 
-    # Build lookup map: node_id → row data
-    neighbor_map: dict[str, dict] = {}
-    for row in rows:
-        if isinstance(row, dict) and row.get("id"):
-            neighbor_map[str(row["id"])] = row
+    # ----- Step 1: depth-1 neighbors for every input id, in one query
+    d1_by_id = await _fetch_neighbors_batch(input_ids, db)
 
-    # Build edge type lookup: {node_id: {target_id: edge_type}}
+    # Build edge-type lookup: per-source, target_id -> edge_type
     edge_types: dict[str, dict[str, str]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        node_id = str(row.get("id", ""))
-        edge_types[node_id] = {}
+    for src_id, data in d1_by_id.items():
+        edge_types[src_id] = _build_edge_type_map(data)
 
-        for edge in (row.get("out_edges") or []):
-            if isinstance(edge, dict):
-                target = str(edge.get("out", ""))
-                edge_types[node_id][target] = edge.get("type", "relates")
+    # Attach depth-1 items to each input memory
+    per_mem_items: dict[str, list[dict]] = {}
+    per_mem_seen: dict[str, set[str]] = {}
 
-        for edge in (row.get("in_edges") or []):
-            if isinstance(edge, dict):
-                source = str(edge.get("in", ""))
-                edge_types[node_id][source] = edge.get("type", "relates")
-
-    # Attach neighbors to each memory
     for mem in memories:
-        mid = mem["id"]
-        data = neighbor_map.get(mid, {})
-
+        mid = mem.get("id")
+        if not mid:
+            continue
+        data = d1_by_id.get(mid, {})
         items: list[dict] = []
         seen: set[str] = set()
 
-        # Helper to add a neighbor item
-        def _add_memory_neighbor(m: dict, direction: str) -> None:
-            if not isinstance(m, dict) or not m.get("id"):
-                return
-            tid = str(m["id"])
-            if tid in seen:
-                return
-            seen.add(tid)
-            items.append({
-                "id": tid,
-                "content_preview": (m.get("content") or "")[:80],
-                "category": m.get("category", ""),
-                "edge_type": edge_types.get(mid, {}).get(tid, "relates"),
-                "edge_direction": direction,
-            })
-
-        def _add_entity_neighbor(e: dict, direction: str) -> None:
-            if not isinstance(e, dict) or not e.get("id"):
-                return
-            tid = str(e["id"])
-            if tid in seen:
-                return
-            seen.add(tid)
-            items.append({
-                "id": tid,
-                "type": e.get("type", ""),
-                "name": e.get("name", ""),
-                "edge_type": edge_types.get(mid, {}).get(tid, "relates"),
-                "edge_direction": direction,
-            })
-
         for m in (data.get("out_memories") or []):
-            _add_memory_neighbor(m, "out")
+            _maybe_add_memory(items, seen, m, "out", edge_types.get(mid, {}), depth_level=1)
         for e in (data.get("out_entities") or []):
-            _add_entity_neighbor(e, "out")
+            _maybe_add_entity(items, seen, e, "out", edge_types.get(mid, {}), depth_level=1)
         for m in (data.get("in_memories") or []):
-            _add_memory_neighbor(m, "in")
+            _maybe_add_memory(items, seen, m, "in", edge_types.get(mid, {}), depth_level=1)
         for e in (data.get("in_entities") or []):
-            _add_entity_neighbor(e, "in")
+            _maybe_add_entity(items, seen, e, "in", edge_types.get(mid, {}), depth_level=1)
 
+        per_mem_items[mid] = items
+        per_mem_seen[mid] = seen | {mid}  # never re-add the input itself
+
+    # ----- Step 2 (only if requested): depth-2 neighbors
+    if depth >= 2:
+        # Collect every depth-1 neighbor across all input memories.
+        d1_neighbor_ids: set[str] = set()
+        for mid, items in per_mem_items.items():
+            for item in items:
+                d1_neighbor_ids.add(item["id"])
+        # Don't re-fetch nodes we already have results for.
+        d1_neighbor_ids -= set(input_ids)
+
+        if d1_neighbor_ids:
+            d2_by_id = await _fetch_neighbors_batch(list(d1_neighbor_ids), db)
+
+            # Edge-type lookup for the d1->d2 hop (originates at d1 node).
+            d2_edge_types: dict[str, dict[str, str]] = {}
+            for src_id, data in d2_by_id.items():
+                d2_edge_types[src_id] = _build_edge_type_map(data)
+
+            # For each input memory, walk its d1 items and pull each d1
+            # neighbor's own neighbors as d2 items, skipping anything
+            # already in the items list (or the input memory itself).
+            for mid, items in per_mem_items.items():
+                seen = per_mem_seen[mid]
+                # Iterate over a copy: items grows as we add d2.
+                for d1_item in list(items):
+                    d1_id = d1_item["id"]
+                    d1_data = d2_by_id.get(d1_id)
+                    if not d1_data:
+                        continue
+                    edge_map = d2_edge_types.get(d1_id, {})
+                    for m in (d1_data.get("out_memories") or []):
+                        _maybe_add_memory(items, seen, m, "out", edge_map, depth_level=2, via=d1_id)
+                    for e in (d1_data.get("out_entities") or []):
+                        _maybe_add_entity(items, seen, e, "out", edge_map, depth_level=2, via=d1_id)
+                    for m in (d1_data.get("in_memories") or []):
+                        _maybe_add_memory(items, seen, m, "in", edge_map, depth_level=2, via=d1_id)
+                    for e in (d1_data.get("in_entities") or []):
+                        _maybe_add_entity(items, seen, e, "in", edge_map, depth_level=2, via=d1_id)
+
+    # Cap and attach. d1 items always come first (insertion order), so
+    # the cap prefers direct neighbors over second-degree.
+    for mem in memories:
+        mid = mem.get("id")
+        if not mid:
+            continue
+        items = per_mem_items.get(mid, [])
         mem["neighbors"] = {
             "count": len(items),
             "items": items[:MAX_NEIGHBORS_PER_NODE],
         }
+
+
+async def _fetch_neighbors_batch(ids: list[str], db: Any) -> dict[str, dict]:
+    """Fetch neighbors for all `ids` in one query. Returns {full_id: row_data}.
+
+    Uses `meta::id(id)` projection because SurrealDB v3 returns id=None
+    when FROM is a list of explicit records. We reconstruct the full id
+    by prefixing the table name (extracted from the input id).
+    """
+    if not ids:
+        return {}
+
+    id_list = ", ".join(ids)
+    surql = f"""
+    SELECT
+        meta::id(id) AS _row_id,
+        ->relates.{{id, type, out}} AS out_edges,
+        <-relates.{{id, type, in}} AS in_edges,
+        ->relates->memory.{{id, content, category, salience}} AS out_memories,
+        ->relates->entity.{{id, name, type}} AS out_entities,
+        <-relates<-memory.{{id, content, category, salience}} AS in_memories,
+        <-relates<-entity.{{id, name, type}} AS in_entities
+    FROM [{id_list}]
+    """
+
+    try:
+        rows = await query(db, surql)
+    except Exception as ex:
+        logger.debug("Neighbor batch fetch failed (non-fatal): %s", ex)
+        return {}
+
+    if not rows or not isinstance(rows, list):
+        return {}
+
+    # Stitch by id. Rows arrive in input order so we use that to
+    # recover the table prefix (memory:xxx or entity:xxx) for each row.
+    by_id: dict[str, dict] = {}
+    for input_id, row in zip(ids, rows):
+        if not isinstance(row, dict) or not row.get("_row_id"):
+            continue
+        # Prefer reconstructing from the input id (which we trust) so
+        # heterogeneous inputs (memory + entity) keep the right prefix.
+        by_id[input_id] = row
+    return by_id
+
+
+def _build_edge_type_map(data: dict) -> dict[str, str]:
+    """Build {target_id: edge_type} from the projected out/in_edges arrays."""
+    edge_map: dict[str, str] = {}
+    for edge in (data.get("out_edges") or []):
+        if isinstance(edge, dict):
+            edge_map[str(edge.get("out", ""))] = edge.get("type", "relates")
+    for edge in (data.get("in_edges") or []):
+        if isinstance(edge, dict):
+            edge_map[str(edge.get("in", ""))] = edge.get("type", "relates")
+    return edge_map
+
+
+def _maybe_add_memory(
+    items: list[dict],
+    seen: set[str],
+    m: dict,
+    direction: str,
+    edge_map: dict[str, str],
+    depth_level: int,
+    via: str | None = None,
+) -> None:
+    """Append a memory neighbor if not already seen."""
+    if not isinstance(m, dict) or not m.get("id"):
+        return
+    tid = str(m["id"])
+    if tid in seen:
+        return
+    seen.add(tid)
+    item: dict[str, Any] = {
+        "id": tid,
+        "content_preview": (m.get("content") or "")[:80],
+        "category": m.get("category", ""),
+        "edge_type": edge_map.get(tid, "relates"),
+        "edge_direction": direction,
+        "depth": depth_level,
+    }
+    if via:
+        item["via"] = via
+    items.append(item)
+
+
+def _maybe_add_entity(
+    items: list[dict],
+    seen: set[str],
+    e: dict,
+    direction: str,
+    edge_map: dict[str, str],
+    depth_level: int,
+    via: str | None = None,
+) -> None:
+    """Append an entity neighbor if not already seen."""
+    if not isinstance(e, dict) or not e.get("id"):
+        return
+    tid = str(e["id"])
+    if tid in seen:
+        return
+    seen.add(tid)
+    item: dict[str, Any] = {
+        "id": tid,
+        "type": e.get("type", ""),
+        "name": e.get("name", ""),
+        "edge_type": edge_map.get(tid, "relates"),
+        "edge_direction": direction,
+        "depth": depth_level,
+    }
+    if via:
+        item["via"] = via
+    items.append(item)
