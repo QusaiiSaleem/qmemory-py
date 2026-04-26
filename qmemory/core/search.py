@@ -452,63 +452,72 @@ async def _graph_leg(
     if not entity_ids:
         return []
 
-    # Fetch memories linked to these entities.
+    # Fetch memories linked to these entities — single batched query.
     #
     # Performance: traverse FROM the (small) relates edge set OUTWARD
-    # instead of `WHERE id IN (subquery)` against the (large) memory
-    # table. The old `id IN (...)` form forced a full memory scan
-    # checking each row against the edge set — for hub entities with
-    # many edges this took 191 seconds in production.
+    # using a single `WHERE out IN [...]` clause. Replaces the previous
+    # per-entity Python loop (one round-trip per matched entity) with
+    # one round-trip total. Uses the `idx_relates_type_in`-friendly
+    # `out IN` form, which the planner serves from the indexed edge set
+    # without scanning the (large) memory table.
     #
-    # Field projection: use the destructuring `.{}` syntax to pull only
-    # the fields in MEMORY_FIELDS (excluding the 1024-float `embedding`
-    # array, which would waste ~120KB per call for 15 results). The
-    # skill's gotcha doc warns against `SELECT *` on memory tables for
-    # exactly this reason.
-    all_memories: list[dict] = []
-    for eid in entity_ids:
-        # NOTE: v3 ORDER BY requires every order idiom to appear in the SELECT
-        # clause. We use `in.<field> AS <field>` aliases so the ordered field
-        # `in.salience` is "in selection" while still flattening the record
-        # to top-level keys for the rest of the pipeline.
-        mem_surql = """
-        SELECT
-            in.id AS id,
-            in.content AS content,
-            in.category AS category,
-            in.salience AS salience,
-            in.scope AS scope,
-            in.confidence AS confidence,
-            in.source_type AS source_type,
-            in.evidence_type AS evidence_type,
-            in.is_active AS is_active,
-            in.linked AS linked,
-            in.recall_count AS recall_count,
-            in.last_recalled AS last_recalled,
-            in.context_mood AS context_mood,
-            in.source_person AS source_person,
-            in.prev_version AS prev_version,
-            in.valid_until AS valid_until,
-            in.created_at AS created_at,
-            in.updated_at AS updated_at
-        FROM relates
-        WHERE out = <record>$eid
-            AND in.is_active = true
-            AND (in.valid_until IS NONE OR in.valid_until > time::now())
-        ORDER BY in.salience DESC
-        LIMIT $limit;
-        """
-        mem_params: dict[str, Any] = {"eid": eid, "limit": GRAPH_LEG_LIMIT}
-        rows = await query(db, mem_surql, mem_params)
-        if rows and isinstance(rows, list):
-            for row in rows:
-                if isinstance(row, dict) and row.get("id"):
-                    all_memories.append(row)
+    # Duplicates intentionally preserved: a memory linked to N matched
+    # entities returns N rows. RRF fusion downstream uses these repeated
+    # rank entries to boost memories that match multiple aspects of the
+    # query — which mirrors the behaviour of the old per-entity loop.
+    #
+    # Field projection: use `in.<field> AS <field>` aliases so the
+    # ordered field (`in.salience`) is "in selection" — v3 ORDER BY
+    # requires every order idiom to appear in the SELECT clause —
+    # while still flattening the relates row to top-level memory fields.
+    record_refs = []
+    mem_params: dict[str, Any] = {}
+    for i, eid in enumerate(entity_ids):
+        record_refs.append(f"<record>$_geid{i}")
+        mem_params[f"_geid{i}"] = eid
+    in_list = ", ".join(record_refs)
 
-    # Tag results
-    for i, m in enumerate(all_memories):
-        m["_leg"] = "graph"
-        m["_rank"] = i
+    # Cap total at GRAPH_LEG_LIMIT * len(entity_ids) but never above 50,
+    # so a hub-heavy query can't dump hundreds of rows into RRF fusion.
+    total_limit = min(GRAPH_LEG_LIMIT * len(entity_ids), 50)
+    mem_params["limit"] = total_limit
+
+    mem_surql = f"""
+    SELECT
+        in.id AS id,
+        in.content AS content,
+        in.category AS category,
+        in.salience AS salience,
+        in.scope AS scope,
+        in.confidence AS confidence,
+        in.source_type AS source_type,
+        in.evidence_type AS evidence_type,
+        in.is_active AS is_active,
+        in.linked AS linked,
+        in.recall_count AS recall_count,
+        in.last_recalled AS last_recalled,
+        in.context_mood AS context_mood,
+        in.source_person AS source_person,
+        in.prev_version AS prev_version,
+        in.valid_until AS valid_until,
+        in.created_at AS created_at,
+        in.updated_at AS updated_at
+    FROM relates
+    WHERE out IN [{in_list}]
+        AND in.is_active = true
+        AND (in.valid_until IS NONE OR in.valid_until > time::now())
+    ORDER BY in.salience DESC
+    LIMIT $limit;
+    """
+    rows = await query(db, mem_surql, mem_params) or []
+
+    all_memories: list[dict] = []
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        row["_leg"] = "graph"
+        row["_rank"] = i
+        all_memories.append(row)
 
     logger.debug(
         "Graph leg: %d memories from %d entities",
