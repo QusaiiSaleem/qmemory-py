@@ -159,6 +159,7 @@ The qmemory rebuild discovered three serious v3 bugs in the `@@` operator. Each 
 - **`WHERE id IN (subquery)` is catastrophically slow** for graph traversal — forces a full memory-table scan checking each row against the edge subquery. Took 191 seconds in production for one query. Workaround: traverse FROM the relates table outward (`SELECT in.* FROM relates WHERE out = $eid`), indexed by `out`, ~60x faster.
 - **FastMCP DNS rebinding auto-allowlist** — when binding to `127.0.0.1`, FastMCP auto-installs a Host-header allowlist that rejects `mem0.qusai.org` with HTTP 421. Pass `transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)` explicitly.
 - **`BaseHTTPMiddleware` doesn't propagate `ContextVar`s** — Starlette runs the downstream app in a separate task context, so `_user_db.set()` in middleware never reaches `get_db()` in core. Use pure ASGI middleware instead (`__call__(scope, receive, send)`).
+- **`SELECT id, ... FROM [r1, r2]` returns id=None** — when `FROM` is a list of explicit records, the planner doesn't preserve the row record id; every result row has `id: null` regardless of what's in the SELECT. Workaround: project `meta::id(id) AS _row_id` and reconstruct the full id with the table prefix you already know. Used by `_enrich_with_graph` (search.py) and `_fetch_neighbors_batch` (get.py) to stitch batched results back to inputs by id rather than by position. Don't trust positional zip — a deleted row will misalign every subsequent index.
 
 ### Search behavior — `meta.search_hint`
 
