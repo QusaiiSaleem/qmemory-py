@@ -56,7 +56,13 @@ async def _cleanup_test_users():
         if rows:
             for row in rows:
                 async with get_db() as base:
-                    await query(base, f"REMOVE DATABASE IF EXISTS {row['db_name']}")
+                    # Backticks are required for hyphenated DB names (EFF wordlist
+                    # codes like `user_audition-uk3um`). Without them the SurrealQL
+                    # parser sees the hyphen as a minus operator and the REMOVE
+                    # silently fails — leaving an orphan database with the admin
+                    # row already deleted. Discovered 2026-04-27 after finding
+                    # 12 such orphans across April test runs.
+                    await query(base, f"REMOVE DATABASE IF EXISTS `{row['db_name']}`")
             async with get_admin_db() as admin:
                 await query(
                     admin,
