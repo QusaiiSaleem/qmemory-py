@@ -63,6 +63,8 @@ SurrealDB runs as a separate Railway service built from `surrealdb/Dockerfile`:
 - **Internal**: `surrealdb.railway.internal:8000` (free, for app→DB)
 - **Auth**: root + `SURREAL_PASS` env var (never hardcoded)
 
+**⚠️ Don't use `railway redeploy --yes` on the surrealdb service.** There's a stale `RAILWAY_DOCKERFILE_PATH=Dockerfile.surreal` env var on this service that points to a nonexistent file. Normal builds work because `surrealdb/railway.json` overrides it, but `railway redeploy` bypasses the railway.json and rebuilds against the bogus path, producing a container where `surreal` launches with no subcommand (crash-loop with `error: 'surreal' requires a subcommand`). Always redeploy by pushing a fresh build from the surrealdb directory: `cd surrealdb && railway up --service surrealdb --detach`. This uses the local `railway.json` + `Dockerfile` explicitly and works every time. (Fix the root cause someday by unsetting the stale env var in the Railway dashboard.)
+
 ```bash
 # Deploy updated Dockerfile to Railway
 cd surrealdb && railway up --service surrealdb --detach
@@ -75,8 +77,21 @@ surreal import -e "https://surrealdb-production-d9ea.up.railway.app" \
 ./surrealdb/backup.sh
 ```
 
-**Railway env vars for SurrealDB service**: `PORT=8000`, `SURREAL_PASS`, `SURREAL_LOG=info`
+**Railway env vars for SurrealDB service**: `PORT=8000`, `SURREAL_PASS`, `SURREAL_LOG=info`, `SURREAL_ROCKSDB_BLOCK_CACHE_SIZE=536870912` (512 MB — see "RAM tuning" below)
 **Railway env vars for app service**: `QMEMORY_SURREAL_URL=ws://surrealdb.railway.internal:8000`
+
+### RAM tuning — why the block cache is capped at 512 MB
+
+By default, SurrealDB auto-sizes its RocksDB block cache to a large fraction of the container's available memory. On Railway this came out to **~10.2 GB** of cache for ~9,000 memories of actual data — roughly 600× the working set. The block cache only accelerates *re-reads* of disk pages; sizing it past the dataset gives no benefit.
+
+Setting `SURREAL_ROCKSDB_BLOCK_CACHE_SIZE=536870912` (512 MB) frees ~10 GB of container RAM with no measurable query-latency impact, because:
+- Total qmemory data on disk is well under 100 MB at current scale
+- HNSW vectors (~18 MB total at 9K memories × 2 KB I16) live in their own cache, not the block cache
+- 512 MB is still ~10× the entire on-disk footprint — every hot page fits
+
+Revert: remove the env var → next redeploy returns to the auto-sized default. Verify the active value in the SurrealDB startup logs: look for `Memory manager: block cache size: ...B`.
+
+If the user count grows past ~50 active accounts (today: 3), revisit this number — the working set scales roughly linearly with active users, and the cache should be ~2–4× the hot working-set size, not the full data size.
 
 ### Multi-User Architecture (Per-User Database Isolation)
 
